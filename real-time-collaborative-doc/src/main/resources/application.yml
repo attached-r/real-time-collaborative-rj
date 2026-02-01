@@ -2,10 +2,29 @@ spring:
   application:
     name: real-time-collaborative-doc
   data:
-    mongodb:
-      uri: mongodb+srv://ranjin:${password:123456789%21}@attached.vpgh8cz.mongodb.net/?appName=attached
+    redis:
+      host: localhost
+      port: 6379
+      database: 4
+            # password: 你的密码（如果有）
+            # database: 0  # 默认 0
+  mongodb:
+    uri: mongodb+srv://ranjin:${password:123456789%21}@attached.vpgh8cz.mongodb.net/?appName=attached
+    database: editer
 
+server:
+  port: 8080  # 或你喜欢的端口
+
+# JWT 密钥（生产环境用随机强密钥，长度至少 32 位）
+jwt:
+  secret: your-super-secret-key-2026-change-this-to-very-long-random-string
+  # noinspection SpringBootApplicationYaml
+  expiration: 86400000  # 过期时间，单位 ms（这里是 24 小时）
+
+# 日志（调试用）
 logging:
   level:
-    # 设置根日志级别为 WARN，这样 INFO 级别的系统启动日志就不会显示
-    root: warn
+    root: INFO
+    org.springframework: INFO
+    org.springframework.data.mongodb: DEBUG  # 重点开这个看 Mongo 连接
+    com.mongodb: DEBUG
