@@ -24,7 +24,7 @@ jwt:
 # 日志（调试用）
 logging:
   level:
-    root: INFO
-    org.springframework: INFO
-    org.springframework.data.mongodb: DEBUG  # 重点开这个看 Mongo 连接
+    root: info
+    org.springframework: info
+    org.springframework.data.mongodb: INFO  # 重点开这个看 Mongo 连接
     com.mongodb: DEBUG
