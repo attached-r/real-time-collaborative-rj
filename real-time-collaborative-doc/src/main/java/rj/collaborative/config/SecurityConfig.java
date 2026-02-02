@@ -2,41 +2,18 @@ package rj.collaborative.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.Customizer;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import rj.collaborative.security.JwtAuthenticationFilter;
 
 @Configuration
-@EnableWebSecurity
 public class SecurityConfig {
-    /**
-     * 配置安全过滤器链
-     */
-    @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http
-            .authorizeHttpRequests(authz -> authz
-                        // 开发/测试端点全部放行
-                        .requestMatchers(
-                                "/hello",
-                                "/test-*",              // 所有 /test- 开头的（如 /test-mongo, /test-register）
-                                "/actuator/**",         // 监控端点
-                                "/swagger-ui/**",       // 如果有 Swagger
-                                "/v3/api-docs/**"       // OpenAPI
-                        ).permitAll()
-                        // 未来正式接口才认证（比如 /api/**）
-                        .requestMatchers("/api/**").authenticated()
-                        // 其他所有请求都需要认证
-                        .anyRequest().authenticated()
-                )
-                .formLogin(Customizer.withDefaults())  // 允许表单登录
-                .httpBasic(Customizer.withDefaults()); // 允许 HTTP Basic 认证
-        return http.build();  // 返回过滤器链
-    }
-
     /**
      * 配置密码加密器
      * 使用 BCrypt 算法进行密码加密
@@ -47,4 +24,67 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * 配置 JWT 认证过滤器
+     * 创建 JwtAuthenticationFilter 对象并返回
+     */
+    @Bean
+    public JwtAuthenticationFilter jwtAuthenticationFilter() {
+        return new JwtAuthenticationFilter();
+    }
+
+    /**
+     * 配置 Spring Security 过滤器链
+     * 创建 SecurityFilterChain 对象并返回
+     */
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthenticationFilter jwtFilter) throws Exception {
+        http
+                .csrf(csrf -> csrf.disable())  // 关闭 CSRF 保护
+                // 关闭 Spring Security 的会话管理，因为我们使用 JWT
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                // 配置权限
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/auth/**", "/hello", "/test-*").permitAll()  // 登录注册 + 测试放行
+                        .anyRequest().authenticated()
+                )
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);  // 加 JWT 过滤器，放在用户名密码过滤器之前
+
+        return http.build();
+    }
+
+    /**
+     * 配置 AuthenticationManager
+     * 创建 AuthenticationManager  认证管理器 对象并返回
+     */
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
 }
+
+/**
+ * 用户登录阶段
+ *     A[用户提交登录请求] --> B[AuthController.login()]
+ *     B --> C[AuthenticationManager.authenticate()]
+ *     C --> D[调用 UserDetailsService.loadUserByUsername()]
+ *     D --> E[从数据库查询用户]
+ *     E --> F[验证密码]
+ *     F --> G[JwtTokenProvider.generateToken()]
+ *     G --> H[生成 JWT Token]
+ *     H --> I[返回 Token 给客户端]
+ *
+ * 后续请求验证阶段
+ *     A[客户端携带 JWT Token 请求] --> B[JwtAuthenticationFilter 拦截]
+ *     B --> C[从 Header 提取 Bearer Token]
+ *     C --> D[JwtTokenProvider.validateToken()]
+ *     D --> E[验证 Token 有效性]
+ *     E -->|有效| F[JwtTokenProvider.getUsernameFromToken()]
+ *     F --> G[获取用户名]
+ *     G --> H[UserDetailsService.loadUserByUsername()]
+ *     H --> I[加载用户详情]
+ *     I --> J[创建 Authentication 对象]
+ *     J --> K[设置到 SecurityContext]
+ *     K --> L[继续执行业务逻辑]
+ *     E -->|无效| M[返回 401 未授权]
+ */
