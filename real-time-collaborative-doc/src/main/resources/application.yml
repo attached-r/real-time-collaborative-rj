@@ -27,4 +27,4 @@ logging:
     root: info
     org.springframework: info
     org.springframework.data.mongodb: INFO  # 重点开这个看 Mongo 连接
-    com.mongodb: DEBUG
+    com.mongodb: INFO
