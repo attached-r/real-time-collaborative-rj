@@ -1,11 +1,10 @@
 package rj.collaborative.service;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import rj.collaborative.entity.DocumentEntity;
 import rj.collaborative.repository.DocumentRepository;
-
+import rj.collaborative.utils.SecurityUtil;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -20,17 +19,21 @@ public class DocumentService {
      * 创建文档（设置 owner 为当前登录用户 ID）
      */
     public DocumentEntity create(String title, String content) {
-        // 从 SecurityContextHolder 取当前用户 ID（JWT 认证后可用）
-        String ownerId = (String) SecurityContextHolder.getContext().getAuthentication().getPrincipal();  // 假设 token 里存 ID，后期调整
-
+        // 1. 安全检查：必须登录
+        if (!SecurityUtil.isAuthenticated()) {
+            throw new IllegalStateException("请先登录");
+        }
+        // 2. 获取当前用户名作为 ownerId（当前阶段用 username，后期可改成 getCurrentUserId()）
+        String ownerId = SecurityUtil.getCurrentUsername();
+        // 3. 构建文档实体
         DocumentEntity doc = DocumentEntity.builder()
                 .title(title)
                 .content(content)
-                .ownerId(ownerId)
-                .version(0L)
-                .versions(new ArrayList<>())
+                .ownerId(ownerId)           // 绑定创建者
+                .version(null)              // 新文档 version 留 null，避免乐观锁冲突
+                .versions(new ArrayList<>()) // 初始化空历史列表
                 .build();
-
+        // 4. 保存并返回（MongoDB 自动生成 id）
         return documentRepository.save(doc);
     }
 
