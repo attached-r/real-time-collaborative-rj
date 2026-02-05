@@ -3,6 +3,7 @@
     <div class="header">
       <h1>我的文档</h1>
       <button @click="createDoc" :disabled="loading">新建文档</button>
+      <button @click="logout" class="logout-btn">登出</button>
     </div>
 
     <div v-if="loading" class="loading">加载中...</div>
@@ -25,6 +26,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
+import { toast } from 'vue3-toastify'  // 引入 toast
 
 interface Document {
   id: string
@@ -44,7 +46,7 @@ onMounted(async () => {
 const fetchDocuments = async () => {
   loading.value = true
   try {
-    const res = await api.get('/documents')
+    const res = await api.get('/api/documents')
     documents.value = res.data
   } catch (err: any) {
     console.error('获取文档失败', err)
@@ -60,7 +62,7 @@ const fetchDocuments = async () => {
 const createDoc = async () => {
   loading.value = true
   try {
-    const res = await api.post('/documents', {
+    const res = await api.post('/api/documents', {
       title: `新文档 ${new Date().toLocaleString()}`,
       content: '这是新文档的初始内容...'
     })
@@ -76,6 +78,11 @@ const createDoc = async () => {
 const viewDoc = (id: string) => {
   router.push(`/documents/${id}`)
   // 后期跳转到编辑页
+}
+
+const logout = () => {
+  localStorage.removeItem('token')
+  router.push('/login')
 }
 </script>
 
@@ -146,6 +153,26 @@ ul {
   text-align: center;
   color: #777;
   font-size: 18px;
+  padding: 50px 0;
+}
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+.logout-btn {
+  background: #e74c3c;
+  color: white;
+}
+
+.logout-btn:hover {
+  background: #c0392b;
+}
+
+.loading {
+  text-align: center;
+  font-size: 18px;
+  color: #666;
   padding: 50px 0;
 }
 </style>

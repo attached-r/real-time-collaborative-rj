@@ -52,7 +52,8 @@ const handleLogin = async () => {
     localStorage.setItem('token', token)
     router.push('/documents')
   } catch (err: any) {
-    console.error('登录失败', err)
+    console.error('登录异常详情：', err)  // 打印完整错误
+    console.log('err.response：', err.response)  // 看是否有 response
     error.value = err.response?.data?.message || '登录失败，请检查用户名或密码'
   } finally {
     loading.value = false

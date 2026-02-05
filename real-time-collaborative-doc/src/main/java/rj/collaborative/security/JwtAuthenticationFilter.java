@@ -4,6 +4,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -17,6 +18,7 @@ import java.io.IOException;
 /**
  * 拦截器，验证请求中的 token
  * */
+@Slf4j
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     @Autowired
@@ -31,9 +33,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
         // 1. 从请求头提取 token
         String token = getTokenFromRequest(request);
-
+        log.info("收到请求 URL: {}, token: {}", request.getRequestURI(), token != null ? "存在" : "缺失");
         // 2. 验证 token 有效性
         if (StringUtils.hasText(token) && jwtTokenProvider.validateToken(token)) {
+            log.info("token 验证成功");
             // 2.1. 从 token 中提取用户名
             String username = jwtTokenProvider.getUsernameFromToken(token);
 
@@ -49,6 +52,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             // 2.5.设置到安全上下文
             SecurityContextHolder.getContext().setAuthentication(authentication);
+        }else {
+            log.info("token 验证失败{}", token);
         }
         // 3. 放行
         filterChain.doFilter(request, response);

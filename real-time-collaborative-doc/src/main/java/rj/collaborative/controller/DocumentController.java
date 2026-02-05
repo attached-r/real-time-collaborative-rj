@@ -50,8 +50,12 @@ public class DocumentController {
     public List<DocumentEntity> getDocuments() {
         // 从 SecurityContextHolder 取当前用户 ID
         String username = SecurityUtil.getCurrentUsername();
-        log.info("获取文档列表：{}", username);
-        return documentService.listByUser(username);
+        log.info("当前登录用户: {}", username);  // 获取当前登录用户名
+
+        List<DocumentEntity> list = documentService.listByUser(username);
+        log.info("查询到文档数量: {}", list.size());
+
+        return list;
     }
 
     /**
