@@ -26,7 +26,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
-import { toast } from 'vue3-toastify'  // 引入 toast
+import { toast } from 'vue3-toastify' // 引入 toast
 
 interface Document {
   id: string
@@ -64,10 +64,10 @@ const createDoc = async () => {
   try {
     const res = await api.post('/api/documents', {
       title: `新文档 ${new Date().toLocaleString()}`,
-      content: '这是新文档的初始内容...'
+      content: '这是新文档的初始内容...',
     })
     alert('创建成功！ID: ' + res.data.id)
-    await fetchDocuments()  // 刷新列表
+    await fetchDocuments() // 刷新列表
   } catch (err: any) {
     alert('创建失败：' + (err.response?.data?.message || '未知错误'))
   } finally {
@@ -135,7 +135,7 @@ ul {
   margin-bottom: 10px;
   background: white;
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .doc-info h3 {
@@ -149,7 +149,8 @@ ul {
   font-size: 14px;
 }
 
-.loading, .empty {
+.loading,
+.empty {
   text-align: center;
   color: #777;
   font-size: 18px;
