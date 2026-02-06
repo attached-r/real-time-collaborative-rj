@@ -1,10 +1,15 @@
 package rj.collaborative.service;
 
+import io.micrometer.common.util.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import rj.collaborative.entity.DocumentEntity;
 import rj.collaborative.repository.DocumentRepository;
 import rj.collaborative.utils.SecurityUtil;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -50,4 +55,28 @@ public class DocumentService {
     public List<DocumentEntity> listByUser(String userId) {
         return documentRepository.findByOwnerId(userId);
     }
+
+    /**
+     * 搜索文档 自定义查询
+     */
+    public List<DocumentEntity> searchByUserAndKeyword(String username, String keyword, int page, int size) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
+
+        if (StringUtils.isBlank(keyword)) {
+            // 无关键词 → 返回所有自己的文档（分页）
+            return documentRepository.findByOwnerId(username, pageable).getContent();
+        }
+
+        // 有关键词 → 模糊搜索标题（忽略大小写）
+        return documentRepository.findByOwnerIdAndTitleContainingIgnoreCase(
+                username, keyword.trim(), pageable).getContent();
+    }
+
+    /**
+     * 根据ID删除文档  内置
+     */
+    public void deleteById(String id) {
+        documentRepository.deleteById(id);
+    }
+
 }

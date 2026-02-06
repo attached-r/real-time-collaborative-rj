@@ -28,8 +28,27 @@ export default defineConfig({
       // 所有 /api 开头的请求转发到后端 Spring Boot
       '/api': {
         target: 'http://localhost:8080',     // 你的后端地址
-        changeOrigin: true,                  // 修改 Origin 头，避免 CORS
-        rewrite: (path) => path    
+        changeOrigin: true,// 修改 Origin 头，避免 CORS
+        secure: false,           // 忽略 HTTPS 证书问题（本地开发常用）
+        // 关键：手动转发所有请求头（包括 Authorization）
+        configure: (proxy, _options) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            // 转发所有原始请求头
+            Object.keys(req.headers).forEach(key => {
+              const value = req.headers[key]
+              if (value) {
+                proxyReq.setHeader(key, value as string | string[])
+              }
+            })
+            // 额外打印确认
+            if (req.headers.authorization) {
+              console.log('Vite proxy 已转发 Authorization header:', req.headers.authorization.substring(0, 20) + '...')
+            } else {
+              console.log('Vite proxy 未发现 Authorization header')
+            }
+          })
+        },
+        rewrite: (path) => path
         // 如果后端路由也带 /api，就改成 rewrite: (path) => path
       },
 

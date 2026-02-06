@@ -6,7 +6,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import rj.collaborative.entity.DocumentEntity;
+import rj.collaborative.repository.DocumentRepository;
 import rj.collaborative.service.DocumentService;
+import rj.collaborative.service.UserService;
 import rj.collaborative.utils.SecurityUtil;
 
 import java.util.List;
@@ -19,6 +21,9 @@ public class DocumentController {
 
     @Autowired
     private DocumentService documentService;  // 注入 Service，复用业务逻辑
+
+    @Autowired
+    private DocumentRepository documentRepository;
 
     /**
      * 创建文档（POST /api/documents）
@@ -83,5 +88,88 @@ public class DocumentController {
         }
 
         return ResponseEntity.ok(doc);  // 200 OK + 文档 JSON
+    }
+
+    /**
+     * 搜索文档（GET /api/documents/search）
+     * - 支持按标题模糊搜索（ignore case）
+     * - 只返回当前用户的文档
+     * - 支持分页（可选）
+     * - 权限：@Authenticated，需要 token
+     */
+    @GetMapping("/search")
+    public List<DocumentEntity> searchDocuments(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+
+        String username = SecurityUtil.getCurrentUsername();
+        log.info("搜索文档 - 用户: {}, 关键词: {}", username, keyword);
+
+        return documentService.searchByUserAndKeyword(username, keyword, page, size);
+    }
+
+    /**
+     * 删除文档（DELETE /api/documents/{id}）
+     * - 根据 id 删除文档
+     * - 加权限检查：只有 owner 才能删除（否则 403）
+     * - 权限：@Authenticated，需要 token
+     * - 详解：先查文档，检查 ownerId == 当前用户 ID，然后调用 delete
+     * - 为什么这样写：防止删除别人文档；返回字符串消息供前端 toast
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<String> deleteDocument(@PathVariable String id) {
+        String username = SecurityUtil.getCurrentUsername();
+        log.info("删除文档请求 - ID: {}, 用户: {}", id, username);
+
+        Optional<DocumentEntity> optionalDoc = documentService.getById(id);
+        if (optionalDoc.isEmpty()) {
+            return ResponseEntity.notFound().build();  // 404 Not Found
+        }
+
+        DocumentEntity doc = optionalDoc.get();
+        if (!doc.getOwnerId().equals(username)) {
+            return ResponseEntity.status(403).body("无权限删除此文档");  // 403 Forbidden
+        }
+
+        documentService.deleteById(id);  // 调用 Repository 删除
+        log.info("删除成功 - ID: {}", id);
+
+        return ResponseEntity.ok("删除成功");
+    }
+
+    /**
+     * 更新文档内容（PUT /api/documents/{id}）
+     * - 接收新的 content
+     * - 加权限检查：只有 owner 才能修改
+     * - 权限：@Authenticated，需要 token
+     * - 详解：先查文档，检查 ownerId，再更新 content + version 自动递增
+     */
+    @PutMapping("/{id}")
+    public ResponseEntity<DocumentEntity> updateDocument(
+            @PathVariable String id,
+            @RequestBody Map<String, String> request) {
+
+        String username = SecurityUtil.getCurrentUsername();
+        log.info("更新文档 - ID: {}, 用户: {}", id, username);
+
+        Optional<DocumentEntity> optionalDoc = documentService.getById(id);
+        if (optionalDoc.isEmpty()) {
+            return ResponseEntity.notFound().build();  // 404
+        }
+        DocumentEntity doc = optionalDoc.get();
+        if (!doc.getOwnerId().equals(username)) {
+            return ResponseEntity.status(403).body(null);  // 403 Forbidden
+        }
+        String newContent = request.get("content");
+        String newTitle = request.get("title");
+        if (newContent == null) {
+            return ResponseEntity.badRequest().body(null);  // 400
+        }
+        doc.setContent(newContent);
+        doc.setTitle(newTitle);
+        // version 由 @Version 自动递增
+        DocumentEntity updated = documentRepository.save(doc);
+        return ResponseEntity.ok(updated);
     }
 }

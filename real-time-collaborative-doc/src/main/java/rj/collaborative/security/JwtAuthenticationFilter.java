@@ -55,6 +55,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }else {
             log.info("token 验证失败{}", token);
         }
+        log.info("请求头 Authorization: {}", request.getHeader("Authorization"));
         // 3. 放行
         filterChain.doFilter(request, response);
     }

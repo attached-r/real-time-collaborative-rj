@@ -33,8 +33,15 @@ const router = createRouter({
   path: '/register',
   name: 'Register',
   component: () => import('../views/RegisterView.vue')
+  },
+  //编辑页面
+  {
+  path: '/edit/:id',
+  name: 'EditDocument',
+  component: () => import('../views/EditDocumentView.vue')
 }
   ]
 })
+
 
 export default router
