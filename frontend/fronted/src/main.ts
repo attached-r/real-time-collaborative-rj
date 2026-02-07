@@ -12,16 +12,20 @@ import 'vue3-toastify/dist/index.css'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 
-import QuillEditor from 'vue-quill-editor'
-import 'quill/dist/quill.core.css'
-import 'quill/dist/quill.snow.css'
-// 挂载
+// 移除 Quill 相关导入和注册
+// import { QuillEditor } from '@vueup/vue-quill'
+// import '@vueup/vue-quill/dist/vue-quill.snow.css'
+// import 'quill/dist/quill.core.css'
+
+// Tiptap 不需要全局注册，在组件内使用 useEditor 即可
+// import { Editor } from '@tiptap/core'  ← 也不需要在这里导入
+
 const app = createApp(App)
 
 app.use(createPinia())
 app.use(router)
-app.mount('#app')
 
+// Toast 配置
 app.use(Toast, {
   autoClose: 5000,
   position: 'top-right',
@@ -33,6 +37,10 @@ app.use(Toast, {
   theme: 'colored',
 })
 
+// Element Plus
 app.use(ElementPlus)
 
-app.component('QuillEditor', QuillEditor)
+// 移除 Quill 组件全局注册
+// app.component('QuillEditor', QuillEditor)
+
+app.mount('#app')

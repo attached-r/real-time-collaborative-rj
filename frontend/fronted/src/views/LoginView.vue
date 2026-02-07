@@ -21,9 +21,12 @@
       <p>还没有账号？ <router-link to="/register">注册</router-link></p>
     </div>
   </div>
+
 </template>
 
 <script setup lang="ts">
+
+
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
