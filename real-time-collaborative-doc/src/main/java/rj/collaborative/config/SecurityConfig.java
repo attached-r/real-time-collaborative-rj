@@ -45,8 +45,8 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 // 配置权限
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/**", "/hello", "/test-*").permitAll()  // 登录注册 + 测试放行
-                        //.requestMatchers("/api/documents/**").permitAll()  // 临时放行
+                        .requestMatchers("/api/auth/**",  "/test-*").permitAll()  // 登录注册 + 测试放行
+                        .requestMatchers("/ws/**").permitAll()       // 关键：必须放行 WebSocket 握手路径
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);  // 加 JWT 过滤器，放在用户名密码过滤器之前

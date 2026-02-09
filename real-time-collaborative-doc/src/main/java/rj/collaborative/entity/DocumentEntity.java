@@ -30,6 +30,9 @@ public class DocumentEntity {
 
     private String ownerId;  // 创建者用户 ID (User.id) 也可以用名字作为id
 
+    // 新增：协作者列表（用户名）
+    private List<String> collaborators = new ArrayList<>();
+
     @Version  // 乐观锁字段，自动递增，防止并发覆盖
     private Long version = 0L;  // 从 0 开始
 

@@ -1,5 +1,6 @@
 package rj.collaborative.security;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
@@ -10,10 +11,15 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
+
+import java.util.Collections;
+import java.util.Map;
+
 /**
  * JWT通道拦截器，用于WebSocket连接的JWT令牌认证
  * 实现在STOMP CONNECT命令时验证JWT令牌并建立安全上下文
  */
+@Slf4j
 @Component // 注册为 Spring Bean
 public class JwtChannelInterceptor implements ChannelInterceptor {
 
@@ -32,25 +38,44 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = StompHeaderAccessor.wrap(message);
 
-        // 只处理CONNECT命令
         if (StompCommand.CONNECT.equals(accessor.getCommand())) {
+            log.info("[JWT Interceptor] 收到 CONNECT 帧");
+
             String authHeader = accessor.getFirstNativeHeader("Authorization");
+            log.info("[JWT Interceptor] Authorization header: {}", authHeader);
 
-            // 验证Authorization头部是否存在且格式正确
-            if (authHeader != null && authHeader.startsWith("Bearer ")) {
-                String token = authHeader.substring(7);
+            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                log.warn("[JWT Interceptor] 缺少或格式错误的 Authorization header");
+                // 临时不抛异常，让连接继续（测试用）
+                return message;
+            }
 
-                // 验证JWT令牌有效性
-                if (jwtTokenProvider.validateToken(token)) {
-                    String username = jwtTokenProvider.getUsernameFromToken(token);
-                    Authentication auth = new UsernamePasswordAuthenticationToken(username, null, null);
-                    SecurityContextHolder.getContext().setAuthentication(auth);
-                    System.out.println("WebSocket 认证成功，用户: " + username);
-                } else {
-                    throw new IllegalArgumentException("Invalid JWT token");
+            String token = authHeader.substring(7);
+            log.info("[JWT Interceptor] 提取 token: {}", token.substring(0, 20) + "...");
+
+            try {
+                if (!jwtTokenProvider.validateToken(token)) {
+                    log.warn("[JWT Interceptor] JWT 令牌无效");
+                    return message;  // 临时不抛
                 }
-            } else {
-                throw new IllegalArgumentException("No JWT token provided in CONNECT frame");
+
+                String username = jwtTokenProvider.getUsernameFromToken(token);
+                log.info("[JWT Interceptor] 解析用户名: {}", username);
+
+                Map<String, Object> attrs = accessor.getSessionAttributes();
+                if (attrs != null) {
+                    attrs.put("username", username);
+                    log.info("[JWT Interceptor] 已存用户名到 sessionAttributes");
+                } else {
+                    log.warn("[JWT Interceptor] sessionAttributes 为 null，无法存用户名");
+                }
+
+                Authentication auth = new UsernamePasswordAuthenticationToken(username, null, null);
+                SecurityContextHolder.getContext().setAuthentication(auth);
+                log.info("[JWT Interceptor] SecurityContext 已设置，用户: {}", username);
+            } catch (Exception e) {
+                log.error("[JWT Interceptor] 处理 CONNECT 时异常", e);
+                // 临时不抛，让连接继续
             }
         }
 

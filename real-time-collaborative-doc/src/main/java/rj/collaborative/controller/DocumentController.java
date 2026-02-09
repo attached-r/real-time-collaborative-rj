@@ -1,8 +1,14 @@
 package rj.collaborative.controller;
 
+import io.micrometer.common.util.StringUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.handler.annotation.DestinationVariable;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import rj.collaborative.entity.DocumentEntity;
@@ -82,11 +88,12 @@ public class DocumentController {
         // 3. 获取当前用户 ID
         DocumentEntity doc = optionalDoc.get();
         String currentUserId = SecurityUtil.getCurrentUsername(); // 从 SecurityContextHolder 取当前用户 ID
-        // 4. 检查 ownerId 是否匹配
-        if (!doc.getOwnerId().equals(currentUserId)) {
-            return ResponseEntity.status(403).build();  // 403 Forbidden（不是 owner）
+        // 4.使用 Service 的统一权限检查（支持协作者）
+        try {
+            documentService.checkAccess(doc);  // 这里调用 Service 的 checkAccess
+        } catch (SecurityException e) {
+            return ResponseEntity.status(403).body(null);  // 403 无权限
         }
-
         return ResponseEntity.ok(doc);  // 200 OK + 文档 JSON
     }
 
@@ -153,23 +160,87 @@ public class DocumentController {
         String username = SecurityUtil.getCurrentUsername();
         log.info("更新文档 - ID: {}, 用户: {}", id, username);
 
-        Optional<DocumentEntity> optionalDoc = documentService.getById(id);
+        Optional<DocumentEntity> optionalDoc = documentService.getById(id);  // 使用 getById（已支持协作者）
         if (optionalDoc.isEmpty()) {
             return ResponseEntity.notFound().build();  // 404
         }
+
         DocumentEntity doc = optionalDoc.get();
-        if (!doc.getOwnerId().equals(username)) {
+
+        // 修改：使用 Service 的统一权限检查（支持协作者）
+        try {
+            documentService.checkAccess(doc);  // 这里调用 checkAccess
+        } catch (SecurityException e) {
+            log.warn("无权限更新文档 - 用户: {}, 文档ID: {}", username, id);
             return ResponseEntity.status(403).body(null);  // 403 Forbidden
         }
+
         String newContent = request.get("content");
         String newTitle = request.get("title");
         if (newContent == null) {
             return ResponseEntity.badRequest().body(null);  // 400
         }
+
         doc.setContent(newContent);
         doc.setTitle(newTitle);
-        // version 由 @Version 自动递增
         DocumentEntity updated = documentRepository.save(doc);
+
+        log.info("文档 {} 更新成功，用户: {}", id, username);
         return ResponseEntity.ok(updated);
+    }
+
+    /**
+     * 新增：分享文档给其他用户
+     * POST /api/documents/{id}/share
+     * Body: { "username": "targetUser" }
+     */
+    @PostMapping("/{id}/share")
+    public ResponseEntity<String> shareDocument(
+            @PathVariable String id,
+            @RequestBody Map<String, String> body) {
+
+        String targetUsername = body.get("username");
+        if (StringUtils.isBlank(targetUsername)) {
+            return ResponseEntity.badRequest().body("缺少用户名");
+        }
+
+        try {
+            documentService.shareWithUser(id, targetUsername);
+            return ResponseEntity.ok("已成功分享给 " + targetUsername);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    /**
+     * 获取当前用户所有可访问文档（我的 + 被分享的）
+     */
+    @GetMapping("/my-accessible")
+    public List<DocumentEntity> getMyAccessibleDocuments() {
+        String username = SecurityUtil.getCurrentUsername();
+        return documentService.getAccessibleDocuments(username);
+    }
+
+    /**
+     * 文档编辑（PUT /api/documents/edit/{id}）
+     * - 接收 Delta
+     * - 加权限检查：只有 owner 才能修改
+     * - 详解：先查文档，检查 ownerId，再调用 Service.applyDelta
+     */
+// DocumentController.handleEdit - 直接返回 applyDelta 的结果（纯字符串）
+    @MessageMapping("/edit/{docId}")
+    @SendTo("/topic/{docId}")
+    public String handleEdit(@DestinationVariable String docId,
+                                String delta,
+                                SimpMessageHeaderAccessor headerAccessor) {
+        log.info("收到文档 {} 的编辑内容: {}", docId, delta.substring(0, Math.min(100, delta.length())));
+
+        try {
+            return documentService.applyDelta(docId, delta, headerAccessor);
+        } catch (Exception e) {
+            log.error("处理编辑失败", e);
+            // 出错时返回错误提示字符串（前端能直接显示）
+            return "【错误】服务器处理失败: " + e.getMessage();
+        }
     }
 }

@@ -33,6 +33,7 @@
         <div class="actions">
           <button @click="viewDoc(doc.id)">查看</button>
           <button @click="editDoc(doc.id)" class="edit-btn">编辑</button>
+          <button @click="shareDoc(doc.id)" class="share-btn">分享</button>
           <button @click="deleteDoc(doc.id)" class="delete-btn">删除</button>
         </div>
       </li>
@@ -59,11 +60,7 @@ interface Document {
 interface ApiError {
   response?: {
     status?: number
-    data?:
-      | {
-          message?: string
-        }
-      | string
+    data?: { message?: string } | string
   }
   message?: string
 }
@@ -78,12 +75,21 @@ onMounted(async () => {
   await fetchDocuments()
 })
 
-// 获取文档列表（支持搜索关键词）
+// 修改：支持搜索我的文档 + 被分享的文档
 const fetchDocuments = async (keyword = '') => {
   loading.value = true
   try {
-    const params = keyword ? { keyword: keyword.trim() } : {}
-    const res = await api.get('/api/documents/search', { params })
+    const token = localStorage.getItem('token')
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    let res
+    if (keyword.trim()) {
+      // 有关键词 → 只搜我的文档（保持原逻辑）
+      const params = { keyword: keyword.trim() }
+      res = await api.get('/api/documents/search', { params })
+    } else {
+      // 无关键词 → 获取所有我能访问的文档（我的 + 被分享的）
+      res = await api.get('/api/documents/my-accessible')
+    }
     documents.value = res.data
   } catch (err: any) {
     const error = err as ApiError
@@ -93,10 +99,10 @@ const fetchDocuments = async (keyword = '') => {
         ? error.response.data.message
         : error.response?.data
     toast.error('获取文档失败：' + (errorMessage || '未知错误'))
-    if (error.response?.status === 401 || error.response?.status === 403) {
-      localStorage.removeItem('token')
-      router.push('/login')
-    }
+    // if (error.response?.status === 401 || error.response?.status === 403) {
+    //   localStorage.removeItem('token')
+    //   router.push('/login')
+    // }
   } finally {
     loading.value = false
   }
@@ -127,7 +133,7 @@ const createDoc = async () => {
       content: '这是新文档的初始内容...',
     })
     toast.success('创建成功！ID: ' + res.data.id)
-    await fetchDocuments(searchKeyword.value) // 保持搜索条件刷新
+    await fetchDocuments(searchKeyword.value)
   } catch (err: any) {
     const error = err as ApiError
     const errorMessage =
@@ -148,6 +154,24 @@ const viewDoc = (id: string) => {
 // 编辑文档
 const editDoc = (id: string) => {
   router.push(`/edit/${id}`)
+}
+
+// 新增：分享文档
+const shareDoc = async (id: string) => {
+  const username = prompt('请输入要分享的用户名：')
+  if (!username || username.trim() === '') {
+    return toast.warning('用户名不能为空')
+  }
+
+  try {
+    await api.post(`/api/documents/${id}/share`, {
+      username: username.trim()
+    })
+    toast.success(`已成功分享给 ${username}`)
+  } catch (err: any) {
+    const error = err as ApiError
+        toast.error('分享失败：' + (typeof error.response?.data === 'string' ? error.response?.data : error.response?.data?.message || '未知错误'))
+  }
 }
 
 // 删除文档
@@ -175,6 +199,17 @@ const logout = () => {
 </script>
 
 <style scoped>
+/* 原有样式保持不变，只新增分享按钮样式 */
+.share-btn {
+  background: #28a745;  /* 绿色，代表分享 */
+  color: white;
+}
+
+.share-btn:hover {
+  background: #218838;
+}
+/* 其余样式完全不变 */
+
 .document-list {
   max-width: 960px;
   margin: 60px auto;

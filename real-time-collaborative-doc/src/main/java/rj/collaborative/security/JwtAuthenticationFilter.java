@@ -31,6 +31,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
+        // 握手阶段可能不带 Authorization 头，放行，让 Stomp 拦截器处理
+        String path=request.getRequestURI();
+        if(path.startsWith("/ws")){
+            filterChain.doFilter(request, response);
+            return;
+        }
         // 1. 从请求头提取 token
         String token = getTokenFromRequest(request);
         log.info("收到请求 URL: {}, token: {}", request.getRequestURI(), token != null ? "存在" : "缺失");

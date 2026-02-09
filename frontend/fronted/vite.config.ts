@@ -7,6 +7,12 @@ import { fileURLToPath, URL } from 'node:url'  // 用于路径解析
 export default defineConfig({
   plugins: [vue()],
 
+
+  // 关键修复：polyfill global 为 window
+  define: {
+    global: 'window'
+  },
+
   // 路径别名配置（@ 指向 src 目录）
   resolve: {
     alias: {

@@ -1,5 +1,6 @@
 package rj.collaborative.config;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
@@ -15,6 +16,8 @@ import rj.collaborative.security.JwtChannelInterceptor;
 @Configuration
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+    @Autowired
+    private JwtChannelInterceptor jwtChannelInterceptor;  // Spring 自动注入
     /**
      * 注册STOMP端点，配置WebSocket连接入口
      * @param registry STOMP端点注册器
@@ -44,13 +47,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
      */
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
-        registration.interceptors(jwtChannelInterceptor());
+        registration.interceptors(jwtChannelInterceptor);
     }
-    /**
-     * 创建并返回JWT通道拦截器实例
-     * @return JwtChannelInterceptor JWT通道拦截器
-     */
-    private JwtChannelInterceptor jwtChannelInterceptor() {
-        return new JwtChannelInterceptor();
-    }
+
 }

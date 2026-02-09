@@ -18,4 +18,7 @@ public interface DocumentRepository extends MongoRepository<DocumentEntity, Stri
     // 分页模糊搜索标题（忽略大小写）
     Page<DocumentEntity> findByOwnerIdAndTitleContainingIgnoreCase(
             String ownerId, String title, Pageable pageable);
+
+    // 按 collaborators 模糊搜索
+    List<DocumentEntity> findByCollaboratorsContaining(String userId);
 }
