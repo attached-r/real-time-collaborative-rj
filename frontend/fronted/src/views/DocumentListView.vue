@@ -50,10 +50,11 @@ import api from '@/api'
 import { toast } from 'vue3-toastify'
 import { ElMessage } from 'element-plus'
 
+/** 【改动点】更新接口类型，适配后端新数据结构 */
 interface Document {
-  id: string
+  id: string          // ObjectId 转为字符串
   title: string
-  content?: string
+  content?: { text: string } | string   // 支持 BSON Document 或字符串
   ownerId?: string
 }
 
@@ -75,34 +76,34 @@ onMounted(async () => {
   await fetchDocuments()
 })
 
-// 修改：支持搜索我的文档 + 被分享的文档
+// 获取文档列表（我的 + 被分享的）
 const fetchDocuments = async (keyword = '') => {
   loading.value = true
   try {
-    const token = localStorage.getItem('token')
-    const headers = token ? { Authorization: `Bearer ${token}` } : {}
     let res
     if (keyword.trim()) {
-      // 有关键词 → 只搜我的文档（保持原逻辑）
       const params = { keyword: keyword.trim() }
       res = await api.get('/api/documents/search', { params })
     } else {
-      // 无关键词 → 获取所有我能访问的文档（我的 + 被分享的）
       res = await api.get('/api/documents/my-accessible')
     }
-    documents.value = res.data
+
+    // 【改动点】数据转换：后端 content 是 Document，提取 text
+    documents.value = res.data.map((item: any) => ({
+      id: item.id.toString(),                    // ObjectId → string
+      title: item.title,
+      content: item.content,                     // 保留原始结构（后续可提取 text）
+      ownerId: item.ownerId
+    }))
+
   } catch (err: any) {
     const error = err as ApiError
     console.error('获取文档失败', error)
     const errorMessage =
       typeof error.response?.data === 'object' && error.response.data !== null
         ? error.response.data.message
-        : error.response?.data
-    toast.error('获取文档失败：' + (errorMessage || '未知错误'))
-    // if (error.response?.status === 401 || error.response?.status === 403) {
-    //   localStorage.removeItem('token')
-    //   router.push('/login')
-    // }
+        : error.response?.data || '未知错误'
+    toast.error('获取文档失败：' + errorMessage)
   } finally {
     loading.value = false
   }
@@ -124,39 +125,62 @@ const resetSearch = () => {
   fetchDocuments()
 }
 
-// 创建文档
+// 创建文档（已适配新后端）
 const createDoc = async () => {
   loading.value = true
   try {
-    const res = await api.post('/api/documents', {
+    const payload = {
       title: `新文档 ${new Date().toLocaleString()}`,
-      content: '这是新文档的初始内容...',
-    })
+      content: '这是新文档的初始内容...',   // 字符串，后端会包装成 Document
+    }
+
+    console.log('[前端] 发送创建请求:', payload)
+    const res = await api.post('/api/documents', payload)
+
+    console.log('[前端] 创建成功，返回:', res.data)
     toast.success('创建成功！ID: ' + res.data.id)
-    await fetchDocuments(searchKeyword.value)
+
+    await fetchDocuments(searchKeyword.value)   // 刷新列表
   } catch (err: any) {
-    const error = err as ApiError
-    const errorMessage =
-      typeof error.response?.data === 'object' && error.response.data !== null
-        ? error.response.data.message
-        : error.response?.data
-    toast.error('创建失败：' + (errorMessage || '未知错误'))
+    console.error('[前端] 创建失败:', err.response?.data || err)
+    const msg = err.response?.data?.message || err.response?.data || '未知错误'
+    toast.error('创建失败：' + msg)
   } finally {
     loading.value = false
   }
 }
 
+// 增加一个内部辅助工具函数
+const getValidId = (id: any): string => {
+  if (!id) return '';
+  // 如果 id 是对象（比如 MongoDB 的 ObjectId 结构）
+  if (typeof id === 'object') {
+    // 优先取 $oid 或 id 属性，否则转字符串
+    return id.$oid || id.id || String(id);
+  }
+  return String(id);
+}
+
 // 查看文档详情
-const viewDoc = (id: string) => {
-  router.push(`/documents/${id}`)
+const viewDoc = (id: any) => {
+  const safeId = getValidId(id);
+  if (safeId === '[object Object]') {
+      console.error('ID 转换失败，请检查后端返回结构', id);
+      return;
+  }
+  router.push(`/documents/${safeId}`);
 }
 
 // 编辑文档
-const editDoc = (id: string) => {
-  router.push(`/edit/${id}`)
+const editDoc = (id: any) => {
+  const safeId = getValidId(id);
+  if (safeId === '[object Object]') {
+      console.error('ID 转换失败，请检查后端返回结构', id);
+      return;
+  }
+  router.push(`/edit/${safeId}`);
 }
-
-// 新增：分享文档
+// 分享文档
 const shareDoc = async (id: string) => {
   const username = prompt('请输入要分享的用户名：')
   if (!username || username.trim() === '') {
@@ -170,7 +194,9 @@ const shareDoc = async (id: string) => {
     toast.success(`已成功分享给 ${username}`)
   } catch (err: any) {
     const error = err as ApiError
-        toast.error('分享失败：' + (typeof error.response?.data === 'string' ? error.response?.data : error.response?.data?.message || '未知错误'))
+    toast.error('分享失败：' + (typeof error.response?.data === 'string'
+      ? error.response?.data
+      : error.response?.data?.message || '未知错误'))
   }
 }
 

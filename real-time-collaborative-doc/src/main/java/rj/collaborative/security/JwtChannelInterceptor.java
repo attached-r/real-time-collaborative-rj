@@ -1,7 +1,8 @@
 package rj.collaborative.security;
 
+import io.jsonwebtoken.lang.Collections;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
@@ -11,28 +12,20 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
+import rj.collaborative.service.OnlineUserService;
 
-import java.util.Collections;
 import java.util.Map;
 
 /**
  * JWT通道拦截器，用于WebSocket连接的JWT令牌认证
- * 实现在STOMP CONNECT命令时验证JWT令牌并建立安全上下文
  */
 @Slf4j
-@Component // 注册为 Spring Bean
+@Component
+@RequiredArgsConstructor
 public class JwtChannelInterceptor implements ChannelInterceptor {
 
-    @Autowired
-    private JwtTokenProvider jwtTokenProvider;  // 生成JWT令牌工具类
-
-    /**
-     * 在消息发送前进行拦截处理，主要处理CONNECT命令的JWT认证
-     * @param message 要发送的消息对象
-     * @param channel 消息通道
-     * @return 处理后的消息对象
-     * @throws IllegalArgumentException 当JWT令牌无效或缺失时抛出异常
-     */
+    private final JwtTokenProvider jwtTokenProvider;
+    private final OnlineUserService onlineUserService;  // 新增注入
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
@@ -46,8 +39,7 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
 
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
                 log.warn("[JWT Interceptor] 缺少或格式错误的 Authorization header");
-                // 临时不抛异常，让连接继续（测试用）
-                return message;
+                return message;  // 允许继续（测试阶段）
             }
 
             String token = authHeader.substring(7);
@@ -56,7 +48,7 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
             try {
                 if (!jwtTokenProvider.validateToken(token)) {
                     log.warn("[JWT Interceptor] JWT 令牌无效");
-                    return message;  // 临时不抛
+                    return message;
                 }
 
                 String username = jwtTokenProvider.getUsernameFromToken(token);
@@ -70,12 +62,33 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
                     log.warn("[JWT Interceptor] sessionAttributes 为 null，无法存用户名");
                 }
 
-                Authentication auth = new UsernamePasswordAuthenticationToken(username, null, null);
+                Authentication auth = new UsernamePasswordAuthenticationToken(username, null, Collections.emptyList());
                 SecurityContextHolder.getContext().setAuthentication(auth);
                 log.info("[JWT Interceptor] SecurityContext 已设置，用户: {}", username);
             } catch (Exception e) {
                 log.error("[JWT Interceptor] 处理 CONNECT 时异常", e);
-                // 临时不抛，让连接继续
+            }
+        }
+
+        // 【新增】处理 SUBSCRIBE（用户进入文档）
+        if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
+            String destination = accessor.getDestination();
+            if (destination != null && destination.startsWith("/topic/")) {
+                String docId = destination.substring("/topic/".length());
+                String username = (String) accessor.getSessionAttributes().get("username");
+
+                if (username != null && !docId.isBlank()) {
+                    onlineUserService.addUser(docId, username);
+                }
+            }
+        }
+
+        // 【新增】处理 DISCONNECT（用户断开连接）
+        if (StompCommand.DISCONNECT.equals(accessor.getCommand())) {
+            String username = (String) accessor.getSessionAttributes().get("username");
+            if (username != null) {
+                log.info("[JWT Interceptor] 用户 {} 断开连接，建议清理在线状态", username);
+                // 这里可以广播用户离线，或留给 Redis 过期清理
             }
         }
 

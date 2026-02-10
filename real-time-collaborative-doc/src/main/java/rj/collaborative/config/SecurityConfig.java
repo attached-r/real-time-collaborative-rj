@@ -38,7 +38,7 @@ public class SecurityConfig {
      * 创建 SecurityFilterChain 对象并返回
      */
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthenticationFilter jwtFilter) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthenticationFilter jwtFilter) throws  IllegalStateException {
         http
                 .csrf(csrf -> csrf.disable())  // 关闭 CSRF 保护
                 // 关闭 Spring Security 的会话管理，因为我们使用 JWT
@@ -46,7 +46,7 @@ public class SecurityConfig {
                 // 配置权限
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**",  "/test-*").permitAll()  // 登录注册 + 测试放行
-                        .requestMatchers("/ws/**").permitAll()       // 关键：必须放行 WebSocket 握手路径
+                        .requestMatchers("/ws/**","/ws").permitAll()       // 关键：必须放行 WebSocket 握手路径
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);  // 加 JWT 过滤器，放在用户名密码过滤器之前

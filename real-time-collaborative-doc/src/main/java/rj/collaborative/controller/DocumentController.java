@@ -2,6 +2,8 @@ package rj.collaborative.controller;
 
 import io.micrometer.common.util.StringUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.bson.Document;
+import java.util.HashMap;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -14,9 +16,9 @@ import org.springframework.web.bind.annotation.*;
 import rj.collaborative.entity.DocumentEntity;
 import rj.collaborative.repository.DocumentRepository;
 import rj.collaborative.service.DocumentService;
-import rj.collaborative.service.UserService;
 import rj.collaborative.utils.SecurityUtil;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -45,9 +47,19 @@ public class DocumentController {
         String title = request.get("title");
         String content = request.get("content");
 
-        DocumentEntity doc = documentService.create(title, content);  // 调用 Service 创建
-        log.info("创建文档：{}", doc.getId());
-        return ResponseEntity.ok(Map.of("id", doc.getId(), "message", "创建成功"));  // 返回 ID 供前端用
+        if (StringUtils.isBlank(title)) {
+            return ResponseEntity.badRequest().body(Map.of("message", "标题不能为空"));
+        }
+
+        DocumentEntity doc = documentService.create(title, content);
+
+        log.info("创建文档成功 - ID: {}", doc.getId());
+
+        Map<String, String> response = Map.of(
+                "id", doc.getId().toString(),     // 返回字符串 ID
+                "message", "创建成功"
+        );
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -146,49 +158,79 @@ public class DocumentController {
     }
 
     /**
-     * 更新文档内容（PUT /api/documents/{id}）
-     * - 接收新的 content
-     * - 加权限检查：只有 owner 才能修改
-     * - 权限：@Authenticated，需要 token
-     * - 详解：先查文档，检查 ownerId，再更新 content + version 自动递增
+     * 更新文档（PUT /api/documents/{id}）
+     * - 接收 { "title": "...", "content": "..." 或 {任意JSON结构} }
+     * - content 支持：
+     *   1. 纯字符串 → 自动包装成 { "text": "..." }
+     *   2. 对象/Map → 直接转为 bson.Document
+     * - 权限：owner 或 collaborator 均可
+     * - 自动更新 updatedAt
      */
     @PutMapping("/{id}")
     public ResponseEntity<DocumentEntity> updateDocument(
             @PathVariable String id,
-            @RequestBody Map<String, String> request) {
+            @RequestBody Map<String, Object> request) {
 
         String username = SecurityUtil.getCurrentUsername();
-        log.info("更新文档 - ID: {}, 用户: {}", id, username);
+        log.info("更新文档请求 - ID: {}, 用户: {}, 请求体: {}", id, username, request);
 
-        Optional<DocumentEntity> optionalDoc = documentService.getById(id);  // 使用 getById（已支持协作者）
+        // 1. 查询文档
+        Optional<DocumentEntity> optionalDoc = documentService.getById(id);
         if (optionalDoc.isEmpty()) {
-            return ResponseEntity.notFound().build();  // 404
+            log.warn("文档不存在: {}", id);
+            return ResponseEntity.notFound().build();
         }
 
         DocumentEntity doc = optionalDoc.get();
 
-        // 修改：使用 Service 的统一权限检查（支持协作者）
+        // 2. 统一权限检查（支持协作者）
         try {
-            documentService.checkAccess(doc);  // 这里调用 checkAccess
+            documentService.checkAccess(doc);
         } catch (SecurityException e) {
             log.warn("无权限更新文档 - 用户: {}, 文档ID: {}", username, id);
-            return ResponseEntity.status(403).body(null);  // 403 Forbidden
+            return ResponseEntity.status(403).build();
         }
 
-        String newContent = request.get("content");
-        String newTitle = request.get("title");
-        if (newContent == null) {
-            return ResponseEntity.badRequest().body(null);  // 400
+// 强制更新（去掉 hasChanges 判断）
+        boolean hasUpdate = false;
+
+        // 更新标题
+        if (request.containsKey("title")) {
+            String newTitle = (String) request.get("title");
+            if (newTitle != null) {
+                doc.setTitle(newTitle);
+                hasUpdate = true;
+                log.debug("标题更新为: {}", newTitle);
+            }
         }
 
-        doc.setContent(newContent);
-        doc.setTitle(newTitle);
-        DocumentEntity updated = documentRepository.save(doc);
+        // 更新 content
+        if (request.containsKey("content")) {
+            Object newContentObj = request.get("content");
+            if (newContentObj instanceof String) {
+                String text = (String) newContentObj;
+                doc.setContent(new Document("text", text));
+                hasUpdate = true;
+                log.debug("content 更新为字符串，长度: {}", text.length());
+            } else if (newContentObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = (Map<String, Object>) newContentObj;
+                doc.setContent(new Document(map));
+                hasUpdate = true;
+                log.debug("content 更新为复杂结构");
+            } else {
+                log.warn("不支持的 content 类型: {}", newContentObj != null ? newContentObj.getClass().getName() : "null");
+            }
+        }
 
-        log.info("文档 {} 更新成功，用户: {}", id, username);
-        return ResponseEntity.ok(updated);
+        // 强制更新时间戳并保存
+        doc.setUpdatedAt(LocalDateTime.now());
+        DocumentEntity saved = documentRepository.save(doc);
+
+        log.info("强制保存成功 - ID: {}, 用户: {}, 新版本: {}", id, username, saved.getVersion());
+
+        return ResponseEntity.ok(saved);
     }
-
     /**
      * 新增：分享文档给其他用户
      * POST /api/documents/{id}/share
@@ -228,19 +270,33 @@ public class DocumentController {
      * - 详解：先查文档，检查 ownerId，再调用 Service.applyDelta
      */
 // DocumentController.handleEdit - 直接返回 applyDelta 的结果（纯字符串）
-    @MessageMapping("/edit/{docId}")
-    @SendTo("/topic/{docId}")
+    @MessageMapping("/edit/{docId}") // 接收消息
+    @SendTo("/topic/{docId}") // 发送消息
     public String handleEdit(@DestinationVariable String docId,
                                 String delta,
                                 SimpMessageHeaderAccessor headerAccessor) {
         log.info("收到文档 {} 的编辑内容: {}", docId, delta.substring(0, Math.min(100, delta.length())));
 
+        String username = (String) headerAccessor.getSessionAttributes().get("username");
         try {
-            return documentService.applyDelta(docId, delta, headerAccessor);
+            documentService.applyDelta(docId, delta, headerAccessor);
+
+            // 【修改方案】构造一个 Map 返回，匹配前端的 data.content
+            Map<String, Object> response = new HashMap<>();
+            response.put("content", delta); // 这里的 delta 已经是前端传来的 JSON 字符串或对象
+            response.put("sender", username);
+
+            String jsonResponse = new JSONObject(response).toString();
+            log.info("广播 JSON 响应: {}", jsonResponse.substring(0, Math.min(100, jsonResponse.length())));
+
+            return jsonResponse;
+
         } catch (Exception e) {
             log.error("处理编辑失败", e);
             // 出错时返回错误提示字符串（前端能直接显示）
-            return "【错误】服务器处理失败: " + e.getMessage();
+            Map<String, String> errorResponse = new HashMap<>();
+            errorResponse.put("error", "服务器处理失败: " + e.getMessage());
+            return new JSONObject(errorResponse).toString();
         }
     }
 }

@@ -24,6 +24,7 @@
     "axios": "^1.13.4",
     "element-plus": "^2.13.2",
     "pinia": "^3.0.4",
+    "quill": "^2.0.3",
     "sockjs-client": "^1.6.1",
     "vue": "^3.5.27",
     "vue-router": "^5.0.1",

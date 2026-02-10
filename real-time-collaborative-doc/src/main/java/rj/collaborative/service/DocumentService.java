@@ -2,6 +2,7 @@ package rj.collaborative.service;
 
 import io.micrometer.common.util.StringUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.bson.Document;  // BSON 类型
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -12,7 +13,9 @@ import rj.collaborative.entity.DocumentEntity;
 import rj.collaborative.repository.DocumentRepository;
 import rj.collaborative.utils.SecurityUtil;
 import org.springframework.dao.OptimisticLockingFailureException;
+import java.time.LocalDateTime;
 import java.util.*;
+
 @Slf4j
 @Service
 public class DocumentService {
@@ -20,112 +23,109 @@ public class DocumentService {
     @Autowired
     private DocumentRepository documentRepository;
 
+    // ────────────────────────────────────────────────
+    // 创建文档（最关键：content 初始化为 BSON Document）
+    // ────────────────────────────────────────────────
     /**
-     * 创建文档（设置 owner 为当前登录用户 ID）
+     * 创建文档（最关键修复）
+     * - content 统一包装为 Document{"text": "..."}
+     * - id 由 MongoDB 自动生成（不手动设置）
      */
-    public DocumentEntity create(String title, String content) {
+    public DocumentEntity create(String title, String initialContent) {
         if (!SecurityUtil.isAuthenticated()) {
             throw new IllegalStateException("请先登录");
         }
         String ownerId = SecurityUtil.getCurrentUsername();
 
+        // 【改动点】正确初始化 BSON Document
+        Document contentDoc = new Document("text", initialContent != null ? initialContent : "");
+
         DocumentEntity doc = DocumentEntity.builder()
                 .title(title)
-                .content(content)
+                .content(contentDoc)
                 .ownerId(ownerId)
-                .version(null)
+                //.version(0L)
                 .versions(new ArrayList<>())
-                .collaborators(new ArrayList<>())   // 新增：初始化协作者列表
+                .collaborators(new ArrayList<>())
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
                 .build();
 
-        return documentRepository.save(doc);
+        DocumentEntity saved = documentRepository.save(doc);
+        log.info("创建文档成功 - ID: {}, owner: {}", saved.getId().toString(), ownerId);
+        return saved;
     }
 
+    // ────────────────────────────────────────────────
+    // 获取单个文档（已支持协作者）
+    // ────────────────────────────────────────────────
     /**
-     * 根据 ID 获取文档（新增：支持协作者访问）
+     * 获取单个文档（支持 String id → ObjectId 自动转换）
      */
     public Optional<DocumentEntity> getById(String id) {
         Optional<DocumentEntity> optionalDoc = documentRepository.findById(id);
         if (optionalDoc.isPresent()) {
-            checkAccess(optionalDoc.get());   // 新增权限检查
+            checkAccess(optionalDoc.get());
         }
         return optionalDoc;
     }
-
-    /**
-     * 根据用户 ID 列出所有文档（新增：支持协作者文档也显示）
-     */
+    // ────────────────────────────────────────────────
+    // 列出用户所有文档（我的 + 协作者的）
+    // ────────────────────────────────────────────────
     public List<DocumentEntity> listByUser(String userId) {
-        // 原有查询 + 协作者文档（可优化为一条查询，这里保持简单）
         List<DocumentEntity> owned = documentRepository.findByOwnerId(userId);
         List<DocumentEntity> collaborated = documentRepository.findByCollaboratorsContaining(userId);
         owned.addAll(collaborated);
         return owned;
     }
 
-    /**
-     * 搜索文档（新增：支持协作者文档搜索）
-     */
+    // ────────────────────────────────────────────────
+    // 搜索文档
+    // ────────────────────────────────────────────────
     public List<DocumentEntity> searchByUserAndKeyword(String username, String keyword, int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
-
         if (StringUtils.isBlank(keyword)) {
             return documentRepository.findByOwnerId(username, pageable).getContent();
         }
-
         return documentRepository.findByOwnerIdAndTitleContainingIgnoreCase(
                 username, keyword.trim(), pageable).getContent();
     }
 
-    /**
-     * 根据ID删除文档
-     */
+    // ────────────────────────────────────────────────
+    // 删除文档
+    // ────────────────────────────────────────────────
     public void deleteById(String id) {
         documentRepository.deleteById(id);
     }
 
-    //--------------------------------------
-    //新增：获取当前用户的所有可访问文档（我的+被分享的）
-    //---------------------------------------
-    /**
-     * 获取当前用户所有可访问文档（我的 + 被分享的）
-     */
+    // ────────────────────────────────────────────────
+    // 获取所有可访问文档（我的 + 被分享的）
+    // ────────────────────────────────────────────────
     public List<DocumentEntity> getAccessibleDocuments(String username) {
-        // 我的文档
         List<DocumentEntity> owned = documentRepository.findByOwnerId(username);
-        // 被分享给我的文档
         List<DocumentEntity> shared = documentRepository.findByCollaboratorsContaining(username);
 
-        // 合并去重
         Set<DocumentEntity> all = new HashSet<>(owned);
         all.addAll(shared);
 
-        // 按更新时间降序
         return all.stream()
                 .sorted((a, b) -> b.getUpdatedAt().compareTo(a.getUpdatedAt()))
                 .toList();
     }
 
     // ────────────────────────────────────────────────
-    // 新增：分享功能
+    // 分享文档
     // ────────────────────────────────────────────────
-
-    /**
-     * 分享文档给其他用户（加到 collaborators）
-     */
     public void shareWithUser(String docId, String targetUsername) {
         String currentUser = SecurityUtil.getCurrentUsername();
-
-        Optional<DocumentEntity> optionalDoc = documentRepository.findById(docId);
-        if (optionalDoc.isEmpty()) {
-            throw new IllegalArgumentException("文档不存在: " + docId);
+        Optional<DocumentEntity> opt = documentRepository.findById(docId);
+        if (opt.isEmpty()) {
+            throw new IllegalArgumentException("文档不存在");
         }
 
-        DocumentEntity doc = optionalDoc.get();
-
-        // 只有 owner 可以分享
+        DocumentEntity doc = opt.get();
         if (!doc.getOwnerId().equals(currentUser)) {
-            throw new SecurityException("只有文档拥有者可以分享");
+            throw new SecurityException("只有拥有者可以分享");
         }
 
         if (doc.getCollaborators().contains(targetUsername)) {
@@ -137,7 +137,7 @@ public class DocumentService {
     }
 
     // ────────────────────────────────────────────────
-    // 新增：统一权限检查方法（最少改动原有代码）
+    // 统一权限检查
     // ────────────────────────────────────────────────
     public void checkAccess(DocumentEntity doc) {
         String currentUser = SecurityUtil.getCurrentUsername();
@@ -151,59 +151,50 @@ public class DocumentService {
     }
 
     // ────────────────────────────────────────────────
-    // 实时协作相关方法（你已有的，保持不变）
+    // 实时协作：应用 delta（追加到 content.text）
     // ────────────────────────────────────────────────
-    /**
-     * 应用 Delta 更新文档内容
-     * @param docId 文档 ID
-     * @param delta 前端传来的 Delta JSON
-     * @param headerAccessor STOMP 消息头（从中取用户名）
-     */
     public String applyDelta(String docId, String delta, SimpMessageHeaderAccessor headerAccessor) {
         String currentUser = (String) headerAccessor.getSessionAttributes().get("username");
-        if (currentUser == null) {
-            log.error("WebSocket 编辑请求未携带用户名，docId: {}", docId);
-            throw new IllegalStateException("WebSocket 未认证，请重新连接");
-        }
+        if (currentUser == null) throw new IllegalStateException("WebSocket 未认证");
 
-        log.info("收到增量编辑 - 用户: {}, 文档ID: {}, 增量长度: {}",
-                currentUser, docId, delta.length());
+        log.info("收到实时编辑 - 用户: {}, 文档: {}, 内容长度: {}", currentUser, docId, delta.length());
 
-        Optional<DocumentEntity> optionalDoc = documentRepository.findById(docId);
-        if (optionalDoc.isEmpty()) {
-            throw new IllegalArgumentException("文档不存在: " + docId);
-        }
+        Optional<DocumentEntity> opt = documentRepository.findById(docId);
+        if (opt.isEmpty()) throw new IllegalArgumentException("文档不存在");
 
-        DocumentEntity doc = optionalDoc.get();
+        DocumentEntity doc = opt.get();
+        checkAccess(doc);
 
-        // 权限检查
-        if (!doc.getOwnerId().equals(currentUser) &&
-                !doc.getCollaborators().contains(currentUser)) {
-            throw new SecurityException("无权限编辑此文档");
-        }
-
-        String currentContent = doc.getContent() != null ? doc.getContent() : "";
-        String updatedContent = currentContent + delta;  // 直接追加增量
+        // 【关键改动】直接覆盖 content.text（前端发完整文本）
+        String newText = delta;
 
         try {
-            doc.setContent(updatedContent);
-//            documentRepository.save(doc);
-            log.info("保存成功，文档ID: {}, 新内容长度: {}", docId, updatedContent.length());
+            doc.setContent(new Document("text", newText));
+            documentRepository.save(doc);
+            log.info("实时覆盖成功 - docId: {}, 新长度: {}", docId, newText.length());
         } catch (OptimisticLockingFailureException e) {
-            log.warn("乐观锁冲突，使用最新版本追加 - docId: {}", docId);
-            doc = documentRepository.findById(docId).orElse(doc);
-            updatedContent = (doc.getContent() != null ? doc.getContent() : "") + delta;
+            log.warn("乐观锁冲突，使用最新版本覆盖");
+            doc = documentRepository.findById(docId).orElseThrow();
+            doc.setContent(new Document("text", newText));
+            documentRepository.save(doc);
         } catch (Exception e) {
-            log.error("保存异常，但继续广播内存内容", e);
+            log.error("实时保存异常", e);
         }
 
-        // 返回完整字符串（前端直接覆盖）
-        return updatedContent;
+        return newText;  // 返回完整文本供广播
     }
 
-
+    // ────────────────────────────────────────────────
+    // 获取当前纯文本内容（供前端初始化）
+    // ────────────────────────────────────────────────
     public String getCurrentContent(String docId) {
-        Optional<DocumentEntity> doc = documentRepository.findById(docId);
-        return doc.map(DocumentEntity::getContent).orElse("");
+        Optional<DocumentEntity> opt = documentRepository.findById(docId);
+        if (opt.isEmpty()) {
+            return "";
+        }
+        Document contentDoc = opt.get().getContent();
+        return (contentDoc != null && contentDoc.containsKey("text"))
+                ? contentDoc.getString("text")
+                : "";
     }
 }

@@ -33,7 +33,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
         // 握手阶段可能不带 Authorization 头，放行，让 Stomp 拦截器处理
         String path=request.getRequestURI();
-        if(path.startsWith("/ws")){
+        if (path.startsWith("/ws/") || path.equals("/ws")) {
             filterChain.doFilter(request, response);
             return;
         }

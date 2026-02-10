@@ -3,7 +3,8 @@
     <h1>文档详情</h1>
     <p>文档 ID: {{ doc.id }}</p>
     <h2>标题: {{ doc.title }}</h2>
-    <p>内容: {{ doc.content }}</p>
+    <!-- 【改动点】：content 是 Document，提取 text -->
+    <p>内容: {{ typeof doc.content === 'object' && doc.content !== null ? doc.content.text : doc.content }}</p>
     <p>创建者: {{ doc.ownerId }}</p>
     <button @click="router.back()">返回列表</button>
   </div>
@@ -15,10 +16,11 @@ import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { toast } from 'vue3-toastify'
 
+/** 【改动点】更新接口类型，适配后端 BSON Document */
 interface Document {
   id: string
   title: string
-  content: string
+  content?: { text: string } | string   // 支持 Document 或字符串
   ownerId: string
 }
 
@@ -31,9 +33,16 @@ onMounted(async () => {
   const id = route.params.id as string
   try {
     const res = await api.get(`/api/documents/${id}`)
-    doc.value = res.data
+
+    // 【改动点】数据转换：提取 content.text
+    doc.value = {
+      id: res.data.id.toString(),
+      title: res.data.title,
+      content: res.data.content,   // 保留原始结构，后续可提取 .text
+      ownerId: res.data.ownerId
+    }
   } catch (err: any) {
-    toast.error('加载文档失败: ' + (err.response?.data || '未知错误'))
+    toast.error('加载文档失败: ' + (err.response?.data?.message || '未知错误'))
     if (err.response?.status === 403) {
       toast.error('无权限查看此文档')
       router.push('/documents')
