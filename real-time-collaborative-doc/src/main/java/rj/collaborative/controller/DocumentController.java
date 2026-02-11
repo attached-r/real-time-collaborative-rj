@@ -22,25 +22,29 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+
+/**
+ * 文档控制器
+ * 处理文档的创建、查询、更新、删除等操作，以及实时协作编辑功能
+ * 
+ * @author collaborative-system
+ * @since 1.0
+ */
 @Slf4j
 @RestController
-@RequestMapping("/api/documents")  // 所有接口前缀 /api/documents
+@RequestMapping("/api/documents")
 public class DocumentController {
 
     @Autowired
-    private DocumentService documentService;  // 注入 Service，复用业务逻辑
-
+    private DocumentService documentService;
     @Autowired
     private DocumentRepository documentRepository;
 
     /**
-     * 创建文档（POST /api/documents）
-     * - 接收 title + content（JSON body）
-     * - 调用 Service.create 设置 ownerId（当前登录用户）
-     * - 返回新文档 ID 或完整文档
-     * - 权限：@Authenticated（SecurityConfig 已配置，需要 token）
-     * - 详解：前端发 POST 带 body，后端自动校验认证（JWT Filter），Service 层处理创建逻辑
-     * - 为什么这样写：分离 Controller（API 入口） + Service（业务），符合 MVC 分层
+     * 创建新文档
+     * 
+     * @param request 包含title和content的请求体
+     * @return 创建成功的文档信息
      */
     @PostMapping
     public ResponseEntity<Map<String, String>> create(@RequestBody Map<String, String> request) {
@@ -52,28 +56,24 @@ public class DocumentController {
         }
 
         DocumentEntity doc = documentService.create(title, content);
-
         log.info("创建文档成功 - ID: {}", doc.getId());
 
         Map<String, String> response = Map.of(
-                "id", doc.getId().toString(),     // 返回字符串 ID
+                "id", doc.getId().toString(),
                 "message", "创建成功"
         );
         return ResponseEntity.ok(response);
     }
 
     /**
-     * 获取文档列表（GET /api/documents）
-     * - 返回当前用户的所有文档列表
-     * - 权限：@Authenticated，需要 token
-     * - 详解：从 SecurityContextHolder 取当前用户 ID，调用 Service.listByUser
-     * - 为什么这样写：列表只显示自己的文档，防止泄露别人数据；用 GET 无参数简单
+     * 获取当前用户的所有文档列表
+     * 
+     * @return 文档列表
      */
     @GetMapping
     public List<DocumentEntity> getDocuments() {
-        // 从 SecurityContextHolder 取当前用户 ID
         String username = SecurityUtil.getCurrentUsername();
-        log.info("当前登录用户: {}", username);  // 获取当前登录用户名
+        log.info("当前登录用户: {}", username);
 
         List<DocumentEntity> list = documentService.listByUser(username);
         log.info("查询到文档数量: {}", list.size());
@@ -82,39 +82,36 @@ public class DocumentController {
     }
 
     /**
-     * 获取单个文档详情（GET /api/documents/{id}）
-     * - 根据 id 查找文档
-     * - 加权限检查：只有 owner 才能查看（否则 403）
-     * - 权限：@Authenticated，需要 token
-     * - 详解：先调用 Service.getById 找文档，然后检查 ownerId == 当前用户 ID
-     * - 为什么这样写：防止用户访问别人文档；用 Optional 处理不存在情况，返回 404
+     * 获取指定文档详情
+     * 
+     * @param id 文档ID
+     * @return 文档详情
      */
     @GetMapping("/{id}")
     public ResponseEntity<DocumentEntity> getDocumentById(@PathVariable String id) {
-        //1. 通过id查询文档
         Optional<DocumentEntity> optionalDoc = documentService.getById(id);
-        // 2. 检查文档是否存在
-        if (optionalDoc.isEmpty()) { //optional作为一个容器，里面装着数据，如果数据不存在，则返回null
-            return ResponseEntity.notFound().build();  // 404 Not Found
+        if (optionalDoc.isEmpty()) {
+            return ResponseEntity.notFound().build();
         }
-        // 3. 获取当前用户 ID
+
         DocumentEntity doc = optionalDoc.get();
-        String currentUserId = SecurityUtil.getCurrentUsername(); // 从 SecurityContextHolder 取当前用户 ID
-        // 4.使用 Service 的统一权限检查（支持协作者）
+        String currentUserId = SecurityUtil.getCurrentUsername();
+
         try {
-            documentService.checkAccess(doc);  // 这里调用 Service 的 checkAccess
+            documentService.checkAccess(doc);
         } catch (SecurityException e) {
-            return ResponseEntity.status(403).body(null);  // 403 无权限
+            return ResponseEntity.status(403).body(null);
         }
-        return ResponseEntity.ok(doc);  // 200 OK + 文档 JSON
+        return ResponseEntity.ok(doc);
     }
 
     /**
-     * 搜索文档（GET /api/documents/search）
-     * - 支持按标题模糊搜索（ignore case）
-     * - 只返回当前用户的文档
-     * - 支持分页（可选）
-     * - 权限：@Authenticated，需要 token
+     * 搜索文档
+     * 
+     * @param keyword 搜索关键词
+     * @param page 页码
+     * @param size 每页大小
+     * @return 搜索结果
      */
     @GetMapping("/search")
     public List<DocumentEntity> searchDocuments(
@@ -129,12 +126,10 @@ public class DocumentController {
     }
 
     /**
-     * 删除文档（DELETE /api/documents/{id}）
-     * - 根据 id 删除文档
-     * - 加权限检查：只有 owner 才能删除（否则 403）
-     * - 权限：@Authenticated，需要 token
-     * - 详解：先查文档，检查 ownerId == 当前用户 ID，然后调用 delete
-     * - 为什么这样写：防止删除别人文档；返回字符串消息供前端 toast
+     * 删除文档
+     * 
+     * @param id 文档ID
+     * @return 删除结果
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<String> deleteDocument(@PathVariable String id) {
@@ -143,28 +138,26 @@ public class DocumentController {
 
         Optional<DocumentEntity> optionalDoc = documentService.getById(id);
         if (optionalDoc.isEmpty()) {
-            return ResponseEntity.notFound().build();  // 404 Not Found
+            return ResponseEntity.notFound().build();
         }
 
         DocumentEntity doc = optionalDoc.get();
         if (!doc.getOwnerId().equals(username)) {
-            return ResponseEntity.status(403).body("无权限删除此文档");  // 403 Forbidden
+            return ResponseEntity.status(403).body("无权限删除此文档");
         }
 
-        documentService.deleteById(id);  // 调用 Repository 删除
+        documentService.deleteById(id);
         log.info("删除成功 - ID: {}", id);
 
         return ResponseEntity.ok("删除成功");
     }
 
     /**
-     * 更新文档（PUT /api/documents/{id}）
-     * - 接收 { "title": "...", "content": "..." 或 {任意JSON结构} }
-     * - content 支持：
-     *   1. 纯字符串 → 自动包装成 { "text": "..." }
-     *   2. 对象/Map → 直接转为 bson.Document
-     * - 权限：owner 或 collaborator 均可
-     * - 自动更新 updatedAt
+     * 更新文档
+     * 
+     * @param id 文档ID
+     * @param request 更新内容
+     * @return 更新后的文档
      */
     @PutMapping("/{id}")
     public ResponseEntity<DocumentEntity> updateDocument(
@@ -174,7 +167,6 @@ public class DocumentController {
         String username = SecurityUtil.getCurrentUsername();
         log.info("更新文档请求 - ID: {}, 用户: {}, 请求体: {}", id, username, request);
 
-        // 1. 查询文档
         Optional<DocumentEntity> optionalDoc = documentService.getById(id);
         if (optionalDoc.isEmpty()) {
             log.warn("文档不存在: {}", id);
@@ -183,7 +175,6 @@ public class DocumentController {
 
         DocumentEntity doc = optionalDoc.get();
 
-        // 2. 统一权限检查（支持协作者）
         try {
             documentService.checkAccess(doc);
         } catch (SecurityException e) {
@@ -191,10 +182,8 @@ public class DocumentController {
             return ResponseEntity.status(403).build();
         }
 
-// 强制更新（去掉 hasChanges 判断）
         boolean hasUpdate = false;
 
-        // 更新标题
         if (request.containsKey("title")) {
             String newTitle = (String) request.get("title");
             if (newTitle != null) {
@@ -204,7 +193,6 @@ public class DocumentController {
             }
         }
 
-        // 更新 content
         if (request.containsKey("content")) {
             Object newContentObj = request.get("content");
             if (newContentObj instanceof String) {
@@ -223,7 +211,6 @@ public class DocumentController {
             }
         }
 
-        // 强制更新时间戳并保存
         doc.setUpdatedAt(LocalDateTime.now());
         DocumentEntity saved = documentRepository.save(doc);
 
@@ -231,10 +218,13 @@ public class DocumentController {
 
         return ResponseEntity.ok(saved);
     }
+
     /**
-     * 新增：分享文档给其他用户
-     * POST /api/documents/{id}/share
-     * Body: { "username": "targetUser" }
+     * 分享文档给其他用户
+     * 
+     * @param id 文档ID
+     * @param body 目标用户名
+     * @return 分享结果
      */
     @PostMapping("/{id}/share")
     public ResponseEntity<String> shareDocument(
@@ -255,7 +245,9 @@ public class DocumentController {
     }
 
     /**
-     * 获取当前用户所有可访问文档（我的 + 被分享的）
+     * 获取当前用户所有可访问文档
+     * 
+     * @return 可访问的文档列表
      */
     @GetMapping("/my-accessible")
     public List<DocumentEntity> getMyAccessibleDocuments() {
@@ -264,14 +256,15 @@ public class DocumentController {
     }
 
     /**
-     * 文档编辑（PUT /api/documents/edit/{id}）
-     * - 接收 Delta
-     * - 加权限检查：只有 owner 才能修改
-     * - 详解：先查文档，检查 ownerId，再调用 Service.applyDelta
+     * 处理文档实时编辑
+     * 
+     * @param docId 文档ID
+     * @param delta 编辑内容
+     * @param headerAccessor 消息头访问器
+     * @return 处理结果
      */
-// DocumentController.handleEdit - 直接返回 applyDelta 的结果（纯字符串）
-    @MessageMapping("/edit/{docId}") // 接收消息
-    @SendTo("/topic/{docId}") // 发送消息
+    @MessageMapping("/edit/{docId}")
+    @SendTo("/topic/{docId}")
     public String handleEdit(@DestinationVariable String docId,
                                 String delta,
                                 SimpMessageHeaderAccessor headerAccessor) {
@@ -281,9 +274,8 @@ public class DocumentController {
         try {
             documentService.applyDelta(docId, delta, headerAccessor);
 
-            // 【修改方案】构造一个 Map 返回，匹配前端的 data.content
             Map<String, Object> response = new HashMap<>();
-            response.put("content", delta); // 这里的 delta 已经是前端传来的 JSON 字符串或对象
+            response.put("content", delta);
             response.put("sender", username);
 
             String jsonResponse = new JSONObject(response).toString();
@@ -293,10 +285,17 @@ public class DocumentController {
 
         } catch (Exception e) {
             log.error("处理编辑失败", e);
-            // 出错时返回错误提示字符串（前端能直接显示）
             Map<String, String> errorResponse = new HashMap<>();
             errorResponse.put("error", "服务器处理失败: " + e.getMessage());
             return new JSONObject(errorResponse).toString();
         }
+    }
+
+    /**
+     * 心跳检测端点
+     */
+    @GetMapping("/ping")
+    public void handlePing() {
+        log.debug("收到心跳请求");
     }
 }

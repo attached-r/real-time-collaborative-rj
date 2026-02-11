@@ -6,29 +6,39 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
+/**
+ * 在线用户管理服务
+ * 负责维护文档的在线用户状态，使用Redis存储用户在线信息
+ * 
+ * @author collaborative-system
+ * @since 1.0
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class OnlineUserService {
 
     private final RedisTemplate<String, String> redisTemplate;
-
     private static final String ONLINE_KEY_PREFIX = "online:";
 
     /**
-     * 用户进入文档 → 添加到在线集合
+     * 用户进入文档时添加到在线集合
+     * 
      * @param docId 文档ID
      * @param username 用户名
      */
     public void addUser(String docId, String username) {
         String key = ONLINE_KEY_PREFIX + docId;
         redisTemplate.opsForSet().add(key, username);
+        redisTemplate.expire(key, 60, TimeUnit.MINUTES);  // 60分钟过期
         log.info("用户 {} 进入文档 {}，当前在线: {}", username, docId, getOnlineUsers(docId));
     }
 
     /**
-     * 用户离开文档 → 从在线集合移除
+     * 用户离开文档时从在线集合移除
+     * 
      * @param docId 文档ID
      * @param username 用户名
      */
@@ -40,6 +50,7 @@ public class OnlineUserService {
 
     /**
      * 获取文档当前在线用户列表
+     * 
      * @param docId 文档ID
      * @return 在线用户名集合
      */
@@ -50,6 +61,10 @@ public class OnlineUserService {
 
     /**
      * 判断用户是否在线
+     * 
+     * @param docId 文档ID
+     * @param username 用户名
+     * @return 用户是否在线
      */
     public boolean isOnline(String docId, String username) {
         String key = ONLINE_KEY_PREFIX + docId;

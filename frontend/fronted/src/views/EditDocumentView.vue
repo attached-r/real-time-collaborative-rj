@@ -12,7 +12,6 @@
 
       <div class="form-group">
         <label>内容（实时协作）</label>
-        <!-- 【改动点】：移除 v-model:content，手动同步 -->
         <quill-editor
           ref="quillRef"
           :options="quillOptions"
@@ -22,9 +21,17 @@
         />
       </div>
 
+      <!-- 【新增】在线人数显示 -->
+      <div class="online-status">
+        当前在线：{{ onlineUsers.length }} 人
+        <span v-if="onlineUsers.length > 1">
+          （{{ onlineUsers.filter(u => u !== currentUsername).slice(0, 5).join(', ') }}）
+        </span>
+      </div>
+
       <div class="status">
         WebSocket 状态：{{ connected ? '已连接' : '连接中...' }}
-        <span v-if="error" style="color: red">（{{ error }}）</span>
+        <span v-if="error" style="color: red;">（{{ error }}）</span>
       </div>
 
       <div class="actions">
@@ -60,6 +67,8 @@ const loading = ref(true)
 const saving = ref(false)
 const hasChanges = ref(false)
 
+// 【新增】在线用户列表
+const onlineUsers = ref<string[]>([])
 const currentUsername = localStorage.getItem('username') || 'unknown_user'
 
 // WebSocket 相关
@@ -67,6 +76,7 @@ const client = ref<Client | null>(null)
 const connected = ref(false)
 const error = ref<string | null>(null)
 let subscription: any = null
+let onlineSubscription: any = null  // 新增：用于在线列表订阅
 
 const quillOptions = {
   theme: 'snow',
@@ -84,7 +94,10 @@ const quillOptions = {
 // 连接 WebSocket
 const connectWebSocket = () => {
   const token = localStorage.getItem('token')
-  if (!token) return
+  if (!token) {
+    toast.error('无 token，无法实时协作')
+    return
+  }
 
   const docId = route.params.id as string
   const socket = new SockJS('http://localhost:8080/ws')
@@ -94,38 +107,67 @@ const connectWebSocket = () => {
     connectHeaders: { Authorization: `Bearer ${token}` },
     debug: (str) => console.log('[STOMP]', str),
     reconnectDelay: 5000,
+    heartbeatIncoming: 10000,
+    heartbeatOutgoing: 10000,
   })
 
   client.value.onConnect = () => {
     connected.value = true
     console.log('[STOMP] 连接成功')
-    if (client.value)
-      subscription = client.value.subscribe(`/topic/${docId}`, (message) => {
-        console.log('[STOMP] 收到广播原始数据:', message.body)
-        let newContent = message.body // 默认用原始字符串（降级方案）
 
-        try {
-          const body = JSON.parse(message.body) // 解析后端返回的 JSON
-          newContent = body.content || message.body // 提取 content 字段（字符串）
-          const sender = body.sender || 'unknown'
+    // 订阅文档内容广播（你的原有逻辑）
+    if(client.value)
+    subscription = client.value.subscribe(`/topic/${docId}`, (message) => {
+      console.log('[STOMP] 收到广播原始数据:', message.body)
 
-          console.log(`[STOMP] 收到 ${sender} 的更新内容:`, newContent.substring(0, 50) + '...')
+      let newContent = message.body
 
-          // 如果是自己发送的，不更新（避免光标跳动）
-          if (sender !== currentUsername) {
-            setQuillContent(newContent)
-          }
-        } catch (e) {
-          console.error('解析广播消息失败:', e, '原始数据:', message.body)
-          // 降级处理：如果解析失败，直接用原始字符串
-          setQuillContent(message.body)
+      try {
+        const body = JSON.parse(message.body)
+        newContent = body.content || message.body
+        const sender = body.sender || 'unknown'
+
+        console.log(`[STOMP] 收到 ${sender} 的更新内容:`, newContent.substring(0, 50) + '...')
+
+        if (sender !== currentUsername) {
+          setQuillContent(newContent)
         }
+      } catch (e) {
+        console.error('解析广播消息失败:', e, '原始数据:', message.body)
+        setQuillContent(newContent)
+      }
+    })
+
+    // 【新增】订阅在线用户列表
+    if(client.value)
+    onlineSubscription = client.value.subscribe(`/topic/${docId}/online`, (message) => {
+      try {
+        const users = JSON.parse(message.body)  // 后端广播的是 Set 的 JSON 数组，如 ["user1","user2"]
+        onlineUsers.value = Array.from(users)
+        console.log('[前端] 更新在线用户列表:', onlineUsers.value)
+      } catch (e) {
+        console.error('解析在线用户列表失败:', e, '原始数据:', message.body)
+        onlineUsers.value = []
+      }
+    })
+    // 【关键修复】订阅成功后，立即手动请求一次当前在线状态
+    setTimeout(() => {
+      if(client.value)
+      client.value.publish({
+        destination: `/app/online/${docId}`  // 后端端点
       })
+      console.log('[前端] 订阅后主动请求在线用户列表')
+  }, 500)  // 延迟 500ms，确保订阅通道已就绪
+}
+
+
+  client.value.onStompError = (frame) => {
+    error.value = frame.body || 'STOMP 连接错误'
+    console.error('[STOMP] 错误:', frame)
   }
 
   client.value.activate()
 }
-
 // 设置 Quill 内容
 const setQuillContent = (text: string) => {
   const quill = quillRef.value?.getQuill()
@@ -200,6 +242,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   subscription?.unsubscribe()
+  onlineSubscription?.unsubscribe()  // 【新增】取消在线列表订阅
   client.value?.deactivate()
 })
 
@@ -323,9 +366,14 @@ button:disabled {
   color: #e74c3c;
 }
 
-.status {
-  margin: 10px 0;
-  font-size: 14px;
-  color: #666;
+.online-status {
+  margin: 15px 0;
+  padding: 10px;
+  background: #f0f9ff;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 15px;
+  color: #1e40af;
+  font-weight: 500;
 }
 </style>
