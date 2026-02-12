@@ -25,7 +25,8 @@
     <div v-if="loading" class="loading">加载中...</div>
 
     <ul v-else-if="documents.length > 0">
-      <li v-for="doc in documents" :key="doc.id" class="doc-item">
+      <li v-for="doc in paginatedDocuments" :key="doc.id" class="doc-item">
+        <!-- 原有文档项内容不变 -->
         <div class="doc-info">
           <h3>{{ doc.title }}</h3>
           <p class="id">ID: {{ doc.id }}</p>
@@ -39,12 +40,28 @@
       </li>
     </ul>
 
-    <p v-else class="empty">暂无文档，快去新建一个吧！</p>
+    <p v-else class="empty">
+      {{ searchKeyword ? '未找到匹配的文档' : '暂无文档，快去新建一个吧！' }}
+    </p>
+
+    <!-- 新增分页控件（放在列表下方） -->
+    <el-pagination
+    v-if="total > pageSize"
+    background
+    layout="total, sizes, prev, pager, next, jumper"
+    :total="total"
+    v-model:current-page="currentPage"
+    v-model:page-size="pageSize"
+    :page-sizes="[5, 10, 15, 20, 30]"
+    @size-change="handleSizeChange"
+    @current-change="handleCurrentChange"
+    style="margin: 40px auto; display: flex; justify-content: center;"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
 import { toast } from 'vue3-toastify'
@@ -66,12 +83,30 @@ interface ApiError {
   message?: string
 }
 
+interface Document {
+  id: string
+  title: string
+  content?: { text: string } | string
+  ownerId?: string
+}
+
 const documents = ref<Document[]>([])
 const loading = ref(false)
 const searchLoading = ref(false)
 const searchKeyword = ref('')
 const router = useRouter()
 
+// ── 新增：分页相关 ────────────────────────────────
+const currentPage = ref(1)
+const pageSize = ref(5)                        // 默认每页10条，可调
+const total = computed(() => documents.value.length)
+
+const paginatedDocuments = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return documents.value.slice(start, end)
+})
+//
 onMounted(async () => {
   await fetchDocuments()
 })
@@ -95,6 +130,8 @@ const fetchDocuments = async (keyword = '') => {
       content: item.content,                     // 保留原始结构（后续可提取 text）
       ownerId: item.ownerId
     }))
+    // 重置到第一页（重要！搜索或重置时）
+    currentPage.value = 1
 
   } catch (err: any) {
     const error = err as ApiError
@@ -148,6 +185,15 @@ const createDoc = async () => {
   } finally {
     loading.value = false
   }
+}
+// ── 新增：分页事件处理 ────────────────────────────────
+const handleSizeChange = (val: number) => {
+  pageSize.value = val
+  currentPage.value = 1  // 切换每页条数时回到第一页
+}
+
+const handleCurrentChange = (val: number) => {
+  currentPage.value = val
 }
 
 // 增加一个内部辅助工具函数
@@ -225,7 +271,6 @@ const logout = () => {
 </script>
 
 <style scoped>
-/* 原有样式保持不变，只新增分享按钮样式 */
 .share-btn {
   background: #28a745;  /* 绿色，代表分享 */
   color: white;
@@ -361,6 +406,95 @@ button:hover:not(:disabled) {
   font-size: 18px;
   padding: 80px 0;
 }
+/* ── Neumorphic + Glow Pagination ──────────────────────────────── */
+.el-pagination {
+  margin: 40px auto 20px !important;   /* 强制居中 + 上下间距 */
+  width: fit-content;                  /* 自适应宽度 */
+  padding: 12px 24px;
+  border-radius: 16px;                 /* 圆润胶囊感 */
+  background: #f8fafc;                 /* 比背景稍浅/同色系，贴合感强 */
+  box-shadow:
+    8px 8px 16px rgba(0, 0, 0, 0.06),  /* 外阴影 - 右下 */
+    -8px -8px 16px rgba(255, 255, 255, 0.8); /* 内高光 - 左上 */
+  transition: all 0.3s ease;
+}
 
+/* Hover 时整体轻微抬升 + glow */
+.el-pagination:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    12px 12px 24px rgba(0, 0, 0, 0.08),
+    -12px -12px 24px rgba(255, 255, 255, 0.9),
+    0 0 20px rgba(59, 130, 246, 0.15);  /* 蓝色微光晕，匹配你的蓝按钮 */
+}
 
+/* 按钮和页码基础 */
+:deep(.btn-prev),
+:deep(.btn-next),
+:deep(.el-pager li) {
+  background: transparent !important;
+  border: none;
+  border-radius: 8px;
+  min-width: 36px;
+  height: 36px;
+  line-height: 36px;
+  margin: 0 6px;
+  color: #1d1d1e;
+  font-weight: 500;
+  transition: all 0.25s ease;
+  box-shadow:
+    inset 3px 3px 6px rgba(0, 0, 0, 0.04),
+    inset -3px -3px 6px rgba(255, 255, 255, 0.7);
+}
+
+/* Hover 单个按钮/页码：反转阴影 + 小 glow */
+:deep(.btn-prev:hover),
+:deep(.btn-next:hover),
+:deep(.el-pager li:hover) {
+  color: #409eff;                      /* Element Plus 默认蓝 */
+  box-shadow:
+    inset -3px -3px 6px rgba(0, 0, 0, 0.04),
+    inset 3px 3px 6px rgba(192, 186, 218, 0.7),
+    0 0 12px rgba(64, 158, 255, 0.3);  /* 发光 */
+  transform: scale(1.08);
+}
+
+/* 当前激活页：更强高亮 + 轻微外发光 */
+:deep(.el-pager li.active),
+:deep(.el-pager li.is-active) {   /* 双选择器更保险 */
+  background: linear-gradient(145deg, #409eff, #60a5fa) !important;
+  color: #ffffff !important;               /* 纯白，最清晰 */
+  /* 或者用非常浅的暖白： color: #f8f9fa !important; */
+  font-weight: 600;
+  border-radius: 8px;
+  box-shadow:
+    0 4px 12px rgba(64, 158, 255, 0.45),
+    inset 0 2px 4px rgba(255, 255, 255, 0.35);  /* 内高光更明显 */
+  transform: scale(1.1);
+  transition: all 0.2s ease;
+}
+
+/* 总条数、每页条数选择器、跳转框 轻微 neumorphic */
+:deep(.el-pagination__total),
+:deep(.el-pagination__jump),
+:deep(.el-select .el-input__wrapper) {
+  color: #606266;
+  background: transparent;
+  box-shadow: none;
+}
+
+:deep(.el-select .el-input__wrapper) {
+  border-radius: 8px;
+  box-shadow:
+    inset 2px 2px 4px rgba(0,0,0,0.05),
+    inset -2px -2px 4px rgba(255,255,255,0.6);
+}
+
+/* 尺寸选择下拉的弹出层也加点风格（可选） */
+:deep(.el-select-dropdown) {
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  background: #ffffff;
+  backdrop-filter: blur(8px);  /* 轻微毛玻璃感，可删 */
+}
 </style>

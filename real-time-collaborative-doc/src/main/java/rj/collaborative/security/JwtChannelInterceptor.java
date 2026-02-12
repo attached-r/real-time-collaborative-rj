@@ -16,7 +16,9 @@ import rj.collaborative.dto.UserOnlineEvent;
 import rj.collaborative.service.OnlineUserService;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * JWT WebSocket通道拦截器
@@ -49,72 +51,104 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
             log.info("[JWT Interceptor] 收到 CONNECT 帧");
 
             String authHeader = accessor.getFirstNativeHeader("Authorization");
-            log.info("[JWT Interceptor] Authorization header: {}", authHeader);
-
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                log.warn("[JWT Interceptor] 缺少或格式错误的 Authorization header");
                 return message;
             }
 
             String token = authHeader.substring(7);
-            log.info("[JWT Interceptor] 提取 token: {}", token.substring(0, 20) + "...");
-
             try {
-                if (!jwtTokenProvider.validateToken(token)) {
-                    log.warn("[JWT Interceptor] JWT 令牌无效");
-                    return message;
+                if (jwtTokenProvider.validateToken(token)) {
+                    String username = jwtTokenProvider.getUsernameFromToken(token);
+                    Map<String, Object> attrs = accessor.getSessionAttributes();
+                    if (attrs != null) {
+                        attrs.put("username", username);
+                        // 初始化 subscribedDocs Set
+                        attrs.put("subscribedDocs", new HashSet<String>());
+                    }
+
+                    Authentication auth = new UsernamePasswordAuthenticationToken(username, null, Collections.emptyList());
+                    SecurityContextHolder.getContext().setAuthentication(auth);
+                    log.info("[JWT] 用户 {} WebSocket 连接认证成功", username);
                 }
-
-                String username = jwtTokenProvider.getUsernameFromToken(token);
-                log.info("[JWT Interceptor] 解析用户名: {}", username);
-
-                Map<String, Object> attrs = accessor.getSessionAttributes();
-                if (attrs != null) {
-                    attrs.put("username", username);
-                    log.info("[JWT Interceptor] 已存用户名到 sessionAttributes");
-                }
-
-                Authentication auth = new UsernamePasswordAuthenticationToken(username, null, Collections.emptyList());
-                SecurityContextHolder.getContext().setAuthentication(auth);
-                log.info("[JWT Interceptor] SecurityContext 已设置，用户: {}", username);
             } catch (Exception e) {
-                log.error("[JWT Interceptor] 处理 CONNECT 时异常", e);
+                log.error("[JWT] CONNECT 处理异常", e);
             }
         }
 
-        // 【新增】处理 SUBSCRIBE（用户进入文档）
+        // ==================== 2. SUBSCRIBE（进入文档）================
         if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
             String destination = accessor.getDestination();
             if (destination != null && destination.startsWith("/topic/")) {
                 String docId = destination.substring("/topic/".length());
-                String username = (String) accessor.getSessionAttributes().get("username");
+                String username = getUsername(accessor);
 
                 if (username != null && !docId.isBlank()) {
-                    onlineUserService.addUser(docId, username);
-                    log.info("[JWT Interceptor] 已调用 addUser，docId={}, username={}", docId, username);
+                    // 记录该 session 订阅的文档（支持多文档）
+                    Set<String> subscribedDocs = getSubscribedDocs(accessor);
+                    subscribedDocs.add(docId);
 
-                    // 【关键】发布用户上线事件
-                    try {
-                        applicationContext.publishEvent(new UserOnlineEvent(docId));
-                        log.info("[JWT Interceptor] UserOnlineEvent 发布成功，docId={}", docId);
-                    } catch (Exception e) {
-                        log.error("[JWT Interceptor] 发布 UserOnlineEvent 失败", e);
-                    }
+                    onlineUserService.addUser(docId, username);
+                    log.info("[JWT] 用户 {} 进入文档 {}", username, docId);
+
+                    applicationContext.publishEvent(new UserOnlineEvent(docId,username));  // 你原来的事件
+                    // 推荐：未来可改成带 username 的事件
                 }
             }
         }
 
-        // 【问题】DISCONNECT 处理不完整 - 缺少用户离线逻辑
-        // 当前只记录日志，没有调用 onlineUserService.removeUser()
-        // 这会导致Redis中用户状态无法及时清理
+        // ==================== 3. UNSUBSCRIBE（离开单个文档）================
+        if (StompCommand.UNSUBSCRIBE.equals(accessor.getCommand())) {
+            String destination = accessor.getDestination();
+            if (destination != null && destination.startsWith("/topic/")) {
+                String docId = destination.substring("/topic/".length());
+                String username = getUsername(accessor);
+
+                if (username != null && !docId.isBlank()) {
+                    Set<String> subscribedDocs = getSubscribedDocs(accessor);
+                    subscribedDocs.remove(docId);
+
+                    onlineUserService.removeUser(docId, username);
+                    log.info("[JWT] 用户 {} 取消订阅文档 {}（UNSUBSCRIBE）", username, docId);
+
+                    applicationContext.publishEvent(new UserOnlineEvent(docId, username));
+                }
+            }
+        }
+
+        // ==================== 4. DISCONNECT（整个连接断开）================
         if (StompCommand.DISCONNECT.equals(accessor.getCommand())) {
-            String username = (String) accessor.getSessionAttributes().get("username");
-            if (username != null) {
-                log.info("[JWT Interceptor] 用户 {} 断开连接，建议清理在线状态", username);
-                // TODO: 应该在这里调用 onlineUserService.removeUser(docId, username)
+            String username = getUsername(accessor);
+            if (username == null) return message;
+
+            Set<String> subscribedDocs = getSubscribedDocs(accessor);
+            if (!subscribedDocs.isEmpty()) {
+                for (String docId : new HashSet<>(subscribedDocs)) {  // 复制避免并发修改
+                    onlineUserService.removeUser(docId, username);
+                    log.info("[JWT] 用户 {} 断开连接，移除文档 {} 的在线状态", username, docId);
+                    applicationContext.publishEvent(new UserOnlineEvent(docId, username));
+                }
+                // 清空
+                accessor.getSessionAttributes().remove("subscribedDocs");
+            } else {
+                log.info("[JWT] 用户 {} 断开连接，但未订阅任何文档", username);
             }
         }
 
         return message;
+    }
+
+    // ==================== 辅助方法 ====================
+    // 从 session 属性中获取用户名
+    private String getUsername(StompHeaderAccessor accessor) {
+        Map<String, Object> attrs = accessor.getSessionAttributes();
+        return attrs != null ? (String) attrs.get("username") : null;
+    }
+    // 从 session 获取订阅的文档
+    @SuppressWarnings("unchecked")  // 忽略类型转换警告的注解
+    private Set<String> getSubscribedDocs(StompHeaderAccessor accessor) {
+        Map<String, Object> attrs = accessor.getSessionAttributes();
+        if (attrs == null) return new HashSet<>();
+
+        return (Set<String>) attrs.computeIfAbsent("subscribedDocs", k -> new HashSet<String>());
     }
 }
