@@ -1,7 +1,7 @@
 <template>
   <div class="app-container">
-    <!-- 主题切换按钮（全局右上角） -->
-    <button class="theme-toggle" @click="toggleTheme">
+    <!-- 主题切换按钮（全局右上角），在登录和注册页面不显示 -->
+    <button v-if="!isAuthPage" class="theme-toggle" @click="toggleTheme">
       {{ isDark ? '☀️ 亮' : '🌙 暗' }}
     </button>
 
@@ -11,8 +11,16 @@
 
 <script setup lang="ts">
 import { useTheme } from '@/composables/useTheme'
+import { useRoute } from 'vue-router'
+import { computed } from 'vue'
 
 const { isDark, toggleTheme } = useTheme()
+const route = useRoute()
+
+// 检查当前是否为认证页面（登录或注册）
+const isAuthPage = computed(() => {
+  return route.name === 'login' || route.name === 'Register'
+})
 </script>
 
 <style scoped>

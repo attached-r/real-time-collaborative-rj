@@ -72,8 +72,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
      */
     @Override
     public void configureWebSocketTransport(WebSocketTransportRegistration registration) {
-        // 设置消息大小限制为128KB
-        registration.setMessageSizeLimit(128 * 1024);
+        // 设置消息大小限制为1280KB
+        registration.setMessageSizeLimit(1280 * 1024);
         
         // 设置发送超时时间为15秒
         registration.setSendTimeLimit(15 * 1000);

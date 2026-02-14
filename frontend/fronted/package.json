@@ -22,7 +22,9 @@
     "@vueup/vue-quill": "^1.2.0",
     "@vueuse/core": "^14.2.0",
     "axios": "^1.13.4",
+    "diff-match-patch": "^1.0.5",
     "element-plus": "^2.13.2",
+    "lodash": "^4.17.23",
     "pinia": "^3.0.4",
     "quill": "^2.0.3",
     "sockjs-client": "^1.6.1",
@@ -32,6 +34,7 @@
   },
   "devDependencies": {
     "@tsconfig/node24": "^24.0.4",
+    "@types/diff-match-patch": "^1.0.36",
     "@types/node": "^24.10.9",
     "@types/quill": "^2.0.14",
     "@types/sockjs-client": "^1.5.4",

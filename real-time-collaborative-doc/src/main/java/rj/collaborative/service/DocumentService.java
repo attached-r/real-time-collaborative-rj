@@ -1,5 +1,7 @@
 package rj.collaborative.service;
 
+import com.github.difflib.DiffUtils;
+import com.github.difflib.patch.Patch;
 import io.micrometer.common.util.StringUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;  // BSON 类型
@@ -7,12 +9,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.stereotype.Service;
 import rj.collaborative.entity.DocumentEntity;
 import rj.collaborative.repository.DocumentRepository;
 import rj.collaborative.utils.SecurityUtil;
-import org.springframework.dao.OptimisticLockingFailureException;
+
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -22,6 +25,9 @@ public class DocumentService {
 
     @Autowired
     private DocumentRepository documentRepository;
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
 
     // ────────────────────────────────────────────────
     // 创建文档（最关键：content 初始化为 BSON Document）
@@ -153,11 +159,9 @@ public class DocumentService {
     // ────────────────────────────────────────────────
     // 实时协作：应用 delta（追加到 content.text）
     // ────────────────────────────────────────────────
-    public String applyDelta(String docId, String delta, SimpMessageHeaderAccessor headerAccessor) {
+    public String applyDelta(String docId, String newText, SimpMessageHeaderAccessor headerAccessor) {
         String currentUser = (String) headerAccessor.getSessionAttributes().get("username");
         if (currentUser == null) throw new IllegalStateException("WebSocket 未认证");
-
-        log.info("收到实时编辑 - 用户: {}, 文档: {}, 内容长度: {}", currentUser, docId, delta.length());
 
         Optional<DocumentEntity> opt = documentRepository.findById(docId);
         if (opt.isEmpty()) throw new IllegalArgumentException("文档不存在");
@@ -165,23 +169,17 @@ public class DocumentService {
         DocumentEntity doc = opt.get();
         checkAccess(doc);
 
-        // 【关键改动】直接覆盖 content.text（前端发完整文本）
-        String newText = delta;
-
         try {
             doc.setContent(new Document("text", newText));
+            doc.setUpdatedAt(LocalDateTime.now());
             documentRepository.save(doc);
-            log.info("实时覆盖成功 - docId: {}, 新长度: {}", docId, newText.length());
-        } catch (OptimisticLockingFailureException e) {
-            log.warn("乐观锁冲突，使用最新版本覆盖");
-            doc = documentRepository.findById(docId).orElseThrow();
-            doc.setContent(new Document("text", newText));
-            documentRepository.save(doc);
+            log.info("实时更新成功 - docId:{}, 用户:{}, 新长度:{}", docId, currentUser, newText.length());
         } catch (Exception e) {
-            log.error("实时保存异常", e);
+            log.error("保存实时内容失败", e);
+            throw e;
         }
 
-        return newText;  // 返回完整文本供广播
+        return newText;
     }
 
     // ────────────────────────────────────────────────
@@ -197,4 +195,5 @@ public class DocumentService {
                 ? contentDoc.getString("text")
                 : "";
     }
+
 }

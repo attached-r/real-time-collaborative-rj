@@ -15,7 +15,6 @@
         <quill-editor
           ref="quillRef"
           :options="quillOptions"
-          @text-change="onTextChange"
           contentType="text"
           v-model:content="doc.content"
         />
@@ -57,7 +56,9 @@ import { QuillEditor } from '@vueup/vue-quill'
 import 'quill/dist/quill.snow.css'
 import { Client } from '@stomp/stompjs'
 import SockJS from 'sockjs-client'
-
+import debounce from 'lodash/debounce'
+import { diff_match_patch } from 'diff-match-patch'
+const isApplyingRemote = ref(false)
 const route = useRoute()
 const router = useRouter()
 const quillRef = ref<InstanceType<typeof QuillEditor> | null>(null)
@@ -66,6 +67,8 @@ const doc = ref({ id: '', title: '', content: '' })
 const loading = ref(true)
 const saving = ref(false)
 const hasChanges = ref(false)
+
+const dmp = new diff_match_patch()
 
 // 【新增】在线用户列表
 const onlineUsers = ref<string[]>([])
@@ -90,6 +93,17 @@ const quillOptions = {
   },
   placeholder: '开始协作编辑...',
 }
+// 防抖函数
+const debouncedSend = debounce((text: string) => {
+  if (!connected.value || !client.value) return
+
+  const docId = route.params.id as string
+  client.value.publish({
+    destination: `/app/edit/${docId}`,
+    body: text,
+  })
+  console.log('[防抖发送] 长度:', text.length)
+}, 450)
 
 // 连接 WebSocket
 const connectWebSocket = () => {
@@ -118,24 +132,28 @@ const connectWebSocket = () => {
     // 订阅文档内容广播（你的原有逻辑）
     if(client.value)
     subscription = client.value.subscribe(`/topic/${docId}`, (message) => {
-      console.log('[STOMP] 收到广播原始数据:', message.body)
+      console.log('[收到广播] 原始 body:', message.body)
 
-      let newContent = message.body
-
+      let data
       try {
-        const body = JSON.parse(message.body)
-        newContent = body.content || message.body
-        const sender = body.sender || 'unknown'
-
-        console.log(`[STOMP] 收到 ${sender} 的更新内容:`, newContent.substring(0, 50) + '...')
-
-        if (sender !== currentUsername) {
-          setQuillContent(newContent)
-        }
+        data = JSON.parse(message.body)
+        console.log('[解析成功] sender:', data.sender, 'content length:', data.content?.length || 0)
       } catch (e) {
-        console.error('解析广播消息失败:', e, '原始数据:', message.body)
-        setQuillContent(newContent)
+        console.error('[解析失败] 使用原始 body', e)
+        data = { content: message.body, sender: 'unknown' }
       }
+
+      const newContent = data.content || ''
+      const sender = data.sender || 'unknown'
+
+      if (sender === currentUsername) {
+        console.log('[忽略自己发的广播] sender 匹配当前用户')
+        return
+      }
+
+      console.log(`[将要应用远程更新] 来自 ${sender}，内容长度 ${newContent.length}`)
+
+      setQuillContent(newContent)  // 调用上面改过的函数
     })
 
     // 【新增】订阅在线用户列表
@@ -171,43 +189,34 @@ const connectWebSocket = () => {
 // 设置 Quill 内容
 const setQuillContent = (text: string) => {
   const quill = quillRef.value?.getQuill()
-  if (quill && text !== undefined && text !== null) {
-    if (quill.getText().trim() !== text.trim()) {
-      quill.setText(text)
-      console.log('[前端] setQuillContent 更新成功:', text.substring(0, 50) + '...')
-    }
+  if (!quill) return
+
+  const currentText = quill.getText()
+
+  // 放宽判断：只要内容长度或内容有差异就更新（避免 trim 误判空格/换行）
+  if (currentText !== text) {   // 改成 !== 而非 trim 比较
+    quill.setText(text, 'silent')   // 必须加 'silent'！！
+    console.log('[setQuillContent] 更新成功 (silent):', text.substring(0, 50))
   } else {
-    console.warn('[前端] setQuillContent 失败，Quill 未就绪或 text 为空')
+    console.log('[setQuillContent] 内容相同，跳过更新')
   }
 }
 
 // Quill 变化发送完整文本
-const onTextChange = (delta: { ops: any[] }, oldDelta: any, source: string) => {
-  console.log('onTextChange事件已触发！source:', source)
+const onTextChange = (delta: any, oldDelta: any, source: string) => {
+  if (source !== 'user' || isApplyingRemote.value){
+    console.log('非用户来源，跳过发送')
+    return
+  }
 
-  if (source !== 'user') return
   hasChanges.value = true
 
-  if (!connected.value || !client.value) {
-    console.log('[前端] WebSocket 未就绪，跳过发送')
-    return
-  }
-
   const quill = quillRef.value?.getQuill()
-  if (!quill) {
-    console.log('[前端] Quill 实例未找到')
-    return
-  }
+  if (!quill) return
 
-  const fullText = quill.getText() // 不 trim，保留所有字符
-  console.log('[前端] 获取完整文本:', fullText.substring(0, 50) + '...', '长度:', fullText.length)
+  const fullText = quill.getText()  // 保留 \n
 
-  const docId = route.params.id as string
-  client.value.publish({
-    destination: `/app/edit/${docId}`,
-    body: fullText,
-  })
-  console.log('[前端] 发送完整文本到:', `/app/edit/${docId}`, '长度:', fullText.length)
+  debouncedSend(fullText)
 }
 
 onMounted(async () => {
@@ -220,21 +229,30 @@ onMounted(async () => {
       content: res.data.content?.text || res.data.content || '',
     }
 
+    // 等待 Quill 组件真正渲染完成（关键修复）
     await nextTick()
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await new Promise(resolve => setTimeout(resolve, 500))  // 先试 500ms，如果还不行改成 800 或 1000
 
     const quill = quillRef.value?.getQuill()
     if (quill) {
-      quill.setText(doc.value.content)
-      console.log('[前端] 强制设置 Quill 内容成功:', doc.value.content.substring(0, 50) + '...')
+      quill.setText(doc.value.content, 'silent')
+      console.log('[前端] Quill 实例就绪，初始内容设置成功:', doc.value.content.substring(0, 50) + '...')
     } else {
-      console.warn('[前端] Quill 实例仍未就绪')
+      console.error('[前端] Quill 实例仍未就绪，等待时间可能不足')
+      // 可选：再等一次（极端情况）
+      setTimeout(() => {
+        const retryQuill = quillRef.value?.getQuill()
+        if (retryQuill) {
+          retryQuill.setText(doc.value.content, 'silent')
+          console.log('[重试成功] Quill 初始内容设置完成')
+        }
+      }, 800)
     }
   } catch (err) {
     toast.error('加载失败')
     router.back()
   } finally {
-    loading.value = false
+    loading.value = false   // 无论成功失败都关闭 loading
   }
 
   connectWebSocket()

@@ -13,6 +13,7 @@ import org.springframework.messaging.handler.annotation.SendTo;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
+import rj.collaborative.dto.PatchRequest;
 import rj.collaborative.entity.DocumentEntity;
 import rj.collaborative.repository.DocumentRepository;
 import rj.collaborative.service.DocumentService;
@@ -259,35 +260,38 @@ public class DocumentController {
      * 处理文档实时编辑
      * 
      * @param docId 文档ID
-     * @param delta 编辑内容
+     * @param content 编辑内容
      * @param headerAccessor 消息头访问器
      * @return 处理结果
      */
     @MessageMapping("/edit/{docId}")
-    @SendTo("/topic/{docId}")
-    public String handleEdit(@DestinationVariable String docId,
-                                String delta,
-                                SimpMessageHeaderAccessor headerAccessor) {
-        log.info("收到文档 {} 的编辑内容: {}", docId, delta.substring(0, Math.min(100, delta.length())));
+    @SendTo("/topic/{docId}")   // 注意这里用 {docId} 占位符
+    public String handleEdit(
+            @DestinationVariable String docId,
+            String content,   // 参数名改成 content，更直观（原来叫 delta）
+            SimpMessageHeaderAccessor headerAccessor) {
 
         String username = (String) headerAccessor.getSessionAttributes().get("username");
+        if (username == null) {
+            log.warn("WebSocket 会话无用户名");
+            return "{\"error\":\"未认证\"}";
+        }
+
+        log.info("收到编辑 - 用户:{}, 文档:{}, 内容长度:{}", username, docId, content.length());
+
         try {
-            documentService.applyDelta(docId, delta, headerAccessor);
+            String updated = documentService.applyDelta(docId, content, headerAccessor);
 
             Map<String, Object> response = new HashMap<>();
-            response.put("content", delta);
+            response.put("content", updated);
             response.put("sender", username);
 
-            String jsonResponse = new JSONObject(response).toString();
-            log.info("广播 JSON 响应: {}", jsonResponse.substring(0, Math.min(100, jsonResponse.length())));
-
-            return jsonResponse;
-
+            String json = new JSONObject(response).toString();
+            log.info("即将广播 JSON: {}", json);  // ← 新增这一行
+            return json;
         } catch (Exception e) {
-            log.error("处理编辑失败", e);
-            Map<String, String> errorResponse = new HashMap<>();
-            errorResponse.put("error", "服务器处理失败: " + e.getMessage());
-            return new JSONObject(errorResponse).toString();
+            log.error("实时编辑处理失败", e);
+            return "{\"error\":\"" + e.getMessage() + "\"}";
         }
     }
 

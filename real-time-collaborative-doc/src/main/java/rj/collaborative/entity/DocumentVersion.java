@@ -13,11 +13,15 @@ import java.time.LocalDateTime;
  */
 @Data
 @Builder
-@NoArgsConstructor
 @AllArgsConstructor
 public class DocumentVersion {
     private Long versionNumber;
     private String editorId;  // 编辑者 ID
     private String delta;     // Quill Delta JSON 或 patch 字符串
     private LocalDateTime timestamp;
+
+
+    public DocumentVersion() {
+        this.timestamp = LocalDateTime.now();
+    }
 }
