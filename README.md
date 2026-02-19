@@ -1,7 +1,7 @@
 
 # 在线实时协作文本编辑器
 
-一个前后端分离的在线文档协作工具，支持多人实时编辑、权限控制、在线用户显示、文档 CRUD 及版本历史记录。类似简化版石墨文档 / Notion。
+一个前后端分离的在线文档协作工具，支持多人实时编辑、权限控制、在线用户显示、文档 CRUD 。类似简化版石墨文档 / Notion。
 
 **项目地址**：https://github.com/attached-r/real-time-collaborative-rj/tree/main/real-time-collaborative-doc
 
