@@ -6,6 +6,9 @@ import org.bson.Document;
 import java.util.HashMap;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
@@ -17,6 +20,7 @@ import rj.collaborative.dto.PatchRequest;
 import rj.collaborative.entity.DocumentEntity;
 import rj.collaborative.repository.DocumentRepository;
 import rj.collaborative.service.DocumentService;
+import rj.collaborative.service.PdfExportService;
 import rj.collaborative.utils.SecurityUtil;
 
 import java.time.LocalDateTime;
@@ -40,6 +44,8 @@ public class DocumentController {
     private DocumentService documentService;
     @Autowired
     private DocumentRepository documentRepository;
+    @Autowired
+    private PdfExportService pdfExportService;
 
     /**
      * 创建新文档
@@ -301,5 +307,30 @@ public class DocumentController {
     @GetMapping("/ping")
     public void handlePing() {
         log.debug("收到心跳请求");
+    }
+
+    /**
+     * 导出文档为 PDF
+     *
+     * @param id 文档ID
+     * @return PDF 文件
+     * @throws Exception 导出失败
+     */
+    @GetMapping("/{id}/export-pdf")
+    public ResponseEntity<byte[]> exportPdf(@PathVariable String id) throws Exception {
+        Optional<DocumentEntity> opt = documentService.getById(id);
+        if (opt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        DocumentEntity doc = opt.get();
+
+        byte[] pdfBytes = pdfExportService.exportDocumentToPdf(doc);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        headers.setContentDispositionFormData("attachment", doc.getTitle() + ".pdf");
+
+        return new ResponseEntity<>(pdfBytes, headers, HttpStatus.OK);
     }
 }

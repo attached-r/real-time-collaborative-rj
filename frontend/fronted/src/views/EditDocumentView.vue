@@ -24,13 +24,18 @@
       <div class="online-status">
         当前在线：{{ onlineUsers.length }} 人
         <span v-if="onlineUsers.length > 1">
-          （{{ onlineUsers.filter(u => u !== currentUsername).slice(0, 5).join(', ') }}）
+          （{{
+            onlineUsers
+              .filter((u) => u !== currentUsername)
+              .slice(0, 5)
+              .join(', ')
+          }}）
         </span>
       </div>
 
       <div class="status">
         WebSocket 状态：{{ connected ? '已连接' : '连接中...' }}
-        <span v-if="error" style="color: red;">（{{ error }}）</span>
+        <span v-if="error" style="color: red">（{{ error }}）</span>
       </div>
 
       <div class="actions">
@@ -38,6 +43,7 @@
           {{ saving ? '保存中...' : '保存' }}
         </button>
         <button @click="router.back()">返回</button>
+        <button @click="exportPdf">导出为 PDF</button>
       </div>
 
       <p v-if="hasChanges" class="tip">有未保存的更改</p>
@@ -79,7 +85,7 @@ const client = ref<Client | null>(null)
 const connected = ref(false)
 const error = ref<string | null>(null)
 let subscription: any = null
-let onlineSubscription: any = null  // 新增：用于在线列表订阅
+let onlineSubscription: any = null // 新增：用于在线列表订阅
 
 const quillOptions = {
   theme: 'snow',
@@ -130,54 +136,58 @@ const connectWebSocket = () => {
     console.log('[STOMP] 连接成功')
 
     // 订阅文档内容广播（你的原有逻辑）
-    if(client.value)
-    subscription = client.value.subscribe(`/topic/${docId}`, (message) => {
-      console.log('[收到广播] 原始 body:', message.body)
+    if (client.value)
+      subscription = client.value.subscribe(`/topic/${docId}`, (message) => {
+        console.log('[收到广播] 原始 body:', message.body)
 
-      let data
-      try {
-        data = JSON.parse(message.body)
-        console.log('[解析成功] sender:', data.sender, 'content length:', data.content?.length || 0)
-      } catch (e) {
-        console.error('[解析失败] 使用原始 body', e)
-        data = { content: message.body, sender: 'unknown' }
-      }
+        let data
+        try {
+          data = JSON.parse(message.body)
+          console.log(
+            '[解析成功] sender:',
+            data.sender,
+            'content length:',
+            data.content?.length || 0,
+          )
+        } catch (e) {
+          console.error('[解析失败] 使用原始 body', e)
+          data = { content: message.body, sender: 'unknown' }
+        }
 
-      const newContent = data.content || ''
-      const sender = data.sender || 'unknown'
+        const newContent = data.content || ''
+        const sender = data.sender || 'unknown'
 
-      if (sender === currentUsername) {
-        console.log('[忽略自己发的广播] sender 匹配当前用户')
-        return
-      }
+        if (sender === currentUsername) {
+          console.log('[忽略自己发的广播] sender 匹配当前用户')
+          return
+        }
 
-      console.log(`[将要应用远程更新] 来自 ${sender}，内容长度 ${newContent.length}`)
+        console.log(`[将要应用远程更新] 来自 ${sender}，内容长度 ${newContent.length}`)
 
-      setQuillContent(newContent)  // 调用上面改过的函数
-    })
+        setQuillContent(newContent) // 调用上面改过的函数
+      })
 
     // 【新增】订阅在线用户列表
-    if(client.value)
-    onlineSubscription = client.value.subscribe(`/topic/${docId}/online`, (message) => {
-      try {
-        const users = JSON.parse(message.body)  // 后端广播的是 Set 的 JSON 数组，如 ["user1","user2"]
-        onlineUsers.value = Array.from(users)
-        console.log('[前端] 更新在线用户列表:', onlineUsers.value)
-      } catch (e) {
-        console.error('解析在线用户列表失败:', e, '原始数据:', message.body)
-        onlineUsers.value = []
-      }
-    })
+    if (client.value)
+      onlineSubscription = client.value.subscribe(`/topic/${docId}/online`, (message) => {
+        try {
+          const users = JSON.parse(message.body) // 后端广播的是 Set 的 JSON 数组，如 ["user1","user2"]
+          onlineUsers.value = Array.from(users)
+          console.log('[前端] 更新在线用户列表:', onlineUsers.value)
+        } catch (e) {
+          console.error('解析在线用户列表失败:', e, '原始数据:', message.body)
+          onlineUsers.value = []
+        }
+      })
     // 【关键修复】订阅成功后，立即手动请求一次当前在线状态
     setTimeout(() => {
-      if(client.value)
-      client.value.publish({
-        destination: `/app/online/${docId}`  // 后端端点
-      })
+      if (client.value)
+        client.value.publish({
+          destination: `/app/online/${docId}`, // 后端端点
+        })
       console.log('[前端] 订阅后主动请求在线用户列表')
-  }, 500)  // 延迟 500ms，确保订阅通道已就绪
-}
-
+    }, 500) // 延迟 500ms，确保订阅通道已就绪
+  }
 
   client.value.onStompError = (frame) => {
     error.value = frame.body || 'STOMP 连接错误'
@@ -194,8 +204,9 @@ const setQuillContent = (text: string) => {
   const currentText = quill.getText()
 
   // 放宽判断：只要内容长度或内容有差异就更新（避免 trim 误判空格/换行）
-  if (currentText !== text) {   // 改成 !== 而非 trim 比较
-    quill.setText(text, 'silent')   // 必须加 'silent'！！
+  if (currentText !== text) {
+    // 改成 !== 而非 trim 比较
+    quill.setText(text, 'silent') // 必须加 'silent'！！
     console.log('[setQuillContent] 更新成功 (silent):', text.substring(0, 50))
   } else {
     console.log('[setQuillContent] 内容相同，跳过更新')
@@ -204,7 +215,7 @@ const setQuillContent = (text: string) => {
 
 // Quill 变化发送完整文本
 const onTextChange = (delta: any, oldDelta: any, source: string) => {
-  if (source !== 'user' || isApplyingRemote.value){
+  if (source !== 'user' || isApplyingRemote.value) {
     console.log('非用户来源，跳过发送')
     return
   }
@@ -214,7 +225,7 @@ const onTextChange = (delta: any, oldDelta: any, source: string) => {
   const quill = quillRef.value?.getQuill()
   if (!quill) return
 
-  const fullText = quill.getText()  // 保留 \n
+  const fullText = quill.getText() // 保留 \n
 
   debouncedSend(fullText)
 }
@@ -231,12 +242,15 @@ onMounted(async () => {
 
     // 等待 Quill 组件真正渲染完成（关键修复）
     await nextTick()
-    await new Promise(resolve => setTimeout(resolve, 500))  // 先试 500ms，如果还不行改成 800 或 1000
+    await new Promise((resolve) => setTimeout(resolve, 500)) // 先试 500ms，如果还不行改成 800 或 1000
 
     const quill = quillRef.value?.getQuill()
     if (quill) {
       quill.setText(doc.value.content, 'silent')
-      console.log('[前端] Quill 实例就绪，初始内容设置成功:', doc.value.content.substring(0, 50) + '...')
+      console.log(
+        '[前端] Quill 实例就绪，初始内容设置成功:',
+        doc.value.content.substring(0, 50) + '...',
+      )
     } else {
       console.error('[前端] Quill 实例仍未就绪，等待时间可能不足')
       // 可选：再等一次（极端情况）
@@ -252,7 +266,7 @@ onMounted(async () => {
     toast.error('加载失败')
     router.back()
   } finally {
-    loading.value = false   // 无论成功失败都关闭 loading
+    loading.value = false // 无论成功失败都关闭 loading
   }
 
   connectWebSocket()
@@ -260,7 +274,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   subscription?.unsubscribe()
-  onlineSubscription?.unsubscribe()  // 【新增】取消在线列表订阅
+  onlineSubscription?.unsubscribe() // 【新增】取消在线列表订阅
   client.value?.deactivate()
 })
 
@@ -283,6 +297,26 @@ const saveDoc = async () => {
     toast.error('保存失败：' + (err.response?.data?.message || '未知错误'))
   } finally {
     saving.value = false
+  }
+}
+const exportPdf = async () => {
+  try {
+    const res = await api.get(`/api/documents/${route.params.id}/export-pdf`, {
+      responseType: 'blob', // 重要：接收二进制
+    })
+
+    const url = window.URL.createObjectURL(new Blob([res.data]))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', `${doc.value.title}.pdf`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+
+    toast.success('PDF 导出成功')
+  } catch (err) {
+    toast.error('导出失败')
   }
 }
 </script>
