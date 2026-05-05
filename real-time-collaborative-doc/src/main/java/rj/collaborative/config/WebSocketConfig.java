@@ -80,5 +80,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         
         // 设置发送缓冲区大小限制为512KB
         registration.setSendBufferSizeLimit(512 * 1024);
+
     }
 }

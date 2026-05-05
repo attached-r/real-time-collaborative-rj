@@ -3,20 +3,14 @@ package rj.collaborative.controller;
 import io.micrometer.common.util.StringUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
-import java.util.HashMap;
-import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.Base64;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.messaging.handler.annotation.DestinationVariable;
-import org.springframework.messaging.handler.annotation.MessageMapping;
-import org.springframework.messaging.handler.annotation.SendTo;
-import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
-import rj.collaborative.dto.PatchRequest;
 import rj.collaborative.entity.DocumentEntity;
 import rj.collaborative.repository.DocumentRepository;
 import rj.collaborative.service.DocumentService;
@@ -218,6 +212,16 @@ public class DocumentController {
             }
         }
 
+        // 接收 Yjs 完整状态快照（Base64 编码的 Y.encodeStateAsUpdate 输出）
+        if (request.containsKey("yjsState")) {
+            String yjsStateBase64 = (String) request.get("yjsState");
+            if (yjsStateBase64 != null && !yjsStateBase64.isEmpty()) {
+                doc.setYjsState(Base64.getDecoder().decode(yjsStateBase64));
+                hasUpdate = true;
+                log.debug("yjsState 已更新，Base64 长度: {}", yjsStateBase64.length());
+            }
+        }
+
         doc.setUpdatedAt(LocalDateTime.now());
         DocumentEntity saved = documentRepository.save(doc);
 
@@ -260,45 +264,6 @@ public class DocumentController {
     public List<DocumentEntity> getMyAccessibleDocuments() {
         String username = SecurityUtil.getCurrentUsername();
         return documentService.getAccessibleDocuments(username);
-    }
-
-    /**
-     * 处理文档实时编辑
-     * 
-     * @param docId 文档ID
-     * @param content 编辑内容
-     * @param headerAccessor 消息头访问器
-     * @return 处理结果
-     */
-    @MessageMapping("/edit/{docId}")
-    @SendTo("/topic/{docId}")   // 注意这里用 {docId} 占位符
-    public String handleEdit(
-            @DestinationVariable String docId,
-            String content,   // 参数名改成 content，更直观（原来叫 delta）
-            SimpMessageHeaderAccessor headerAccessor) {
-
-        String username = (String) headerAccessor.getSessionAttributes().get("username");
-        if (username == null) {
-            log.warn("WebSocket 会话无用户名");
-            return "{\"error\":\"未认证\"}";
-        }
-
-        log.info("收到编辑 - 用户:{}, 文档:{}, 内容长度:{}", username, docId, content.length());
-
-        try {
-            String updated = documentService.applyDelta(docId, content, headerAccessor);
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("content", updated);
-            response.put("sender", username);
-
-            String json = new JSONObject(response).toString();
-            log.info("即将广播 JSON: {}", json);  // ← 新增这一行
-            return json;
-        } catch (Exception e) {
-            log.error("实时编辑处理失败", e);
-            return "{\"error\":\"" + e.getMessage() + "\"}";
-        }
     }
 
     /**

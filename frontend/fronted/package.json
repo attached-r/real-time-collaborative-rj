@@ -27,10 +27,16 @@
     "lodash": "^4.17.23",
     "pinia": "^3.0.4",
     "quill": "^2.0.3",
+    "quill-cursors": "^4.2.0",
     "sockjs-client": "^1.6.1",
     "vue": "^3.5.27",
     "vue-router": "^5.0.1",
-    "vue3-toastify": "^0.2.8"
+    "vue3-toastify": "^0.2.8",
+    "y-protocols": "^1.0.7",
+    "y-quill": "^1.0.0",
+    "y-webrtc": "^10.3.0",
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.30"
   },
   "devDependencies": {
     "@tsconfig/node24": "^24.0.4",

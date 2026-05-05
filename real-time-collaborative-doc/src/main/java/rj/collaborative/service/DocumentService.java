@@ -1,7 +1,5 @@
 package rj.collaborative.service;
 
-import com.github.difflib.DiffUtils;
-import com.github.difflib.patch.Patch;
 import io.micrometer.common.util.StringUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;  // BSON 类型
@@ -154,46 +152,6 @@ public class DocumentService {
                 !doc.getCollaborators().contains(currentUser)) {
             throw new SecurityException("无权限访问此文档");
         }
-    }
-
-    // ────────────────────────────────────────────────
-    // 实时协作：应用 delta（追加到 content.text）
-    // ────────────────────────────────────────────────
-    public String applyDelta(String docId, String newText, SimpMessageHeaderAccessor headerAccessor) {
-        String currentUser = (String) headerAccessor.getSessionAttributes().get("username");
-        if (currentUser == null) throw new IllegalStateException("WebSocket 未认证");
-
-        Optional<DocumentEntity> opt = documentRepository.findById(docId);
-        if (opt.isEmpty()) throw new IllegalArgumentException("文档不存在");
-
-        DocumentEntity doc = opt.get();
-        checkAccess(doc);
-
-        try {
-            doc.setContent(new Document("text", newText));
-            doc.setUpdatedAt(LocalDateTime.now());
-            documentRepository.save(doc);
-            log.info("实时更新成功 - docId:{}, 用户:{}, 新长度:{}", docId, currentUser, newText.length());
-        } catch (Exception e) {
-            log.error("保存实时内容失败", e);
-            throw e;
-        }
-
-        return newText;
-    }
-
-    // ────────────────────────────────────────────────
-    // 获取当前纯文本内容（供前端初始化）
-    // ────────────────────────────────────────────────
-    public String getCurrentContent(String docId) {
-        Optional<DocumentEntity> opt = documentRepository.findById(docId);
-        if (opt.isEmpty()) {
-            return "";
-        }
-        Document contentDoc = opt.get().getContent();
-        return (contentDoc != null && contentDoc.containsKey("text"))
-                ? contentDoc.getString("text")
-                : "";
     }
 
 }

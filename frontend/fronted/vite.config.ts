@@ -33,7 +33,7 @@ export default defineConfig({
     proxy: {
       // 所有 /api 开头的请求转发到后端 Spring Boot
       '/api': {
-        target: 'http://localhost:8080',     // 你的后端地址
+        target: 'http://localhost:8081',     // 你的后端地址
         changeOrigin: true,// 修改 Origin 头，避免 CORS
         secure: false,           // 忽略 HTTPS 证书问题（本地开发常用）
         // 关键：手动转发所有请求头（包括 Authorization）
@@ -60,7 +60,7 @@ export default defineConfig({
 
       // WebSocket 代理（明天实时编辑用）
       '/ws': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:8081',
         ws: true,                            // 启用 WebSocket 代理
         changeOrigin: true
       }

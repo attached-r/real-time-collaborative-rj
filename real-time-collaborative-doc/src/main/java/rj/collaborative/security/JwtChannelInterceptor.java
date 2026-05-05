@@ -87,31 +87,41 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
                     Set<String> subscribedDocs = getSubscribedDocs(accessor);
                     subscribedDocs.add(docId);
 
-                    onlineUserService.addUser(docId, username);
-                    log.info("[JWT] 用户 {} 进入文档 {}", username, docId);
+                    // 记录 subscriptionId → docId 映射（UNSUBSCRIBE 时用，因 UNSUBSCRIBE 帧无 destination 头）
+                    String subscriptionId = accessor.getSubscriptionId();
+                    if (subscriptionId != null) {
+                        accessor.getSessionAttributes().put("sub_" + subscriptionId, docId);
+                    }
 
-                    applicationContext.publishEvent(new UserOnlineEvent(docId,username));  // 你原来的事件
-                    // 推荐：未来可改成带 username 的事件
+                    onlineUserService.addUser(docId, username);
+                    log.info("[JWT] 用户 {} 进入文档 {}, subscriptionId={}", username, docId, subscriptionId);
+
+                    applicationContext.publishEvent(new UserOnlineEvent(docId,username));
                 }
             }
         }
 
         // ==================== 3. UNSUBSCRIBE（离开单个文档）================
         if (StompCommand.UNSUBSCRIBE.equals(accessor.getCommand())) {
-            String destination = accessor.getDestination();
-            if (destination != null && destination.startsWith("/topic/")) {
-                String docId = destination.substring("/topic/".length());
-                String username = getUsername(accessor);
+            String username = getUsername(accessor);
+            String subscriptionId = accessor.getSubscriptionId();
+            Map<String, Object> attrs = accessor.getSessionAttributes();
 
-                if (username != null && !docId.isBlank()) {
-                    Set<String> subscribedDocs = getSubscribedDocs(accessor);
-                    subscribedDocs.remove(docId);
+            if (username == null || subscriptionId == null || attrs == null) {
+                return message;
+            }
 
-                    onlineUserService.removeUser(docId, username);
-                    log.info("[JWT] 用户 {} 取消订阅文档 {}（UNSUBSCRIBE）", username, docId);
+            // 从 subscriptionId → docId 映射中查找
+            String docId = (String) attrs.get("sub_" + subscriptionId);
+            if (docId != null && !docId.isBlank()) {
+                Set<String> subscribedDocs = getSubscribedDocs(accessor);
+                subscribedDocs.remove(docId);
+                attrs.remove("sub_" + subscriptionId);
 
-                    applicationContext.publishEvent(new UserOnlineEvent(docId, username));
-                }
+                onlineUserService.removeUser(docId, username);
+                log.info("[JWT] 用户 {} 取消订阅文档 {}（UNSUBSCRIBE, subId={}）", username, docId, subscriptionId);
+
+                applicationContext.publishEvent(new UserOnlineEvent(docId, username));
             }
         }
 

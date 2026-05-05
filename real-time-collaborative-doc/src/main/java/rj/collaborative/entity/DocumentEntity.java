@@ -40,6 +40,9 @@ public class DocumentEntity {
     @Version  // 乐观锁字段，自动递增，防止并发覆盖
     private Long version ;
 
+    // Yjs 完整状态快照（Y.encodeStateAsUpdate 的二进制输出），用于新用户同步 CRDT 状态
+    private byte[] yjsState;
+
     // 版本历史：嵌入式 List（每个元素存 delta 变更）
     private List<DocumentVersion> versions = new ArrayList<>();
 

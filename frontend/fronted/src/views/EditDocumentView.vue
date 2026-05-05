@@ -12,20 +12,16 @@
 
       <div class="form-group">
         <label>内容（实时协作）</label>
-        <quill-editor
-          ref="quillRef"
-          :options="quillOptions"
-          contentType="text"
-          v-model:content="doc.content"
-        />
+        <!-- ✅ 移除 v-model:content，Yjs 接管内容同步 -->
+        <quill-editor ref="quillRef" :options="quillOptions" />
       </div>
 
-      <!-- 【新增】在线人数显示 -->
+      <!-- 在线用户列表（来自 Yjs Awareness） -->
       <div class="online-status">
-        当前在线：{{ onlineUsers.length }} 人
-        <span v-if="onlineUsers.length > 1">
+        当前在线：{{ onlineUserList.length }} 人
+        <span v-if="onlineUserList.length > 1">
           （{{
-            onlineUsers
+            onlineUserList
               .filter((u) => u !== currentUsername)
               .slice(0, 5)
               .join(', ')
@@ -35,7 +31,7 @@
 
       <div class="status">
         WebSocket 状态：{{ connected ? '已连接' : '连接中...' }}
-        <span v-if="error" style="color: red">（{{ error }}）</span>
+        <span v-if="wsError" style="color: red">（{{ wsError }}）</span>
       </div>
 
       <div class="actions">
@@ -54,38 +50,44 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { toast } from 'vue3-toastify'
-import { QuillEditor } from '@vueup/vue-quill'
+import { Quill, QuillEditor } from '@vueup/vue-quill'
 import 'quill/dist/quill.snow.css'
 import { Client } from '@stomp/stompjs'
 import SockJS from 'sockjs-client'
-import debounce from 'lodash/debounce'
-import { diff_match_patch } from 'diff-match-patch'
-const isApplyingRemote = ref(false)
+import QuillCursors from 'quill-cursors'
+
+// ✅ Yjs 核心
+import * as Y from 'yjs'
+import { QuillBinding } from 'y-quill'
+import { Awareness } from 'y-protocols/awareness'
+import * as awarenessProtocol from 'y-protocols/awareness'
+
+Quill.register('modules/cursors', QuillCursors)
+
+// ─────────────────────────────────────────────
+// 路由 & 基础状态
+// ─────────────────────────────────────────────
 const route = useRoute()
 const router = useRouter()
-const quillRef = ref<InstanceType<typeof QuillEditor> | null>(null)
+const docId = route.params.id as string
 
-const doc = ref({ id: '', title: '', content: '' })
+const doc = ref<{ id: string; title: string } | null>(null)
 const loading = ref(true)
 const saving = ref(false)
 const hasChanges = ref(false)
+const connected = ref(false)
+const wsError = ref<string | null>(null)
 
-const dmp = new diff_match_patch()
-
-// 【新增】在线用户列表
-const onlineUsers = ref<string[]>([])
 const currentUsername = localStorage.getItem('username') || 'unknown_user'
 
-// WebSocket 相关
-const client = ref<Client | null>(null)
-const connected = ref(false)
-const error = ref<string | null>(null)
-let subscription: any = null
-let onlineSubscription: any = null // 新增：用于在线列表订阅
+// ─────────────────────────────────────────────
+// Quill 配置
+// ─────────────────────────────────────────────
+const quillRef = ref<InstanceType<typeof QuillEditor> | null>(null)
 
 const quillOptions = {
   theme: 'snow',
@@ -96,22 +98,75 @@ const quillOptions = {
       ['link', 'image'],
       ['clean'],
     ],
+    // ✅ Yjs 需要 cursor 模块显示他人光标
+    cursors: {
+      transformOnTextChange: true,
+    },
   },
   placeholder: '开始协作编辑...',
 }
-// 防抖函数
-const debouncedSend = debounce((text: string) => {
-  if (!connected.value || !client.value) return
 
-  const docId = route.params.id as string
-  client.value.publish({
-    destination: `/app/edit/${docId}`,
-    body: text,
+// ─────────────────────────────────────────────
+// Yjs 核心对象
+// ─────────────────────────────────────────────
+const ydoc = new Y.Doc()
+const ytext = ydoc.getText('quill') // 共享文本类型，key 固定为 'quill'
+const awareness = new Awareness(ydoc)
+
+// ─────────────────────────────────────────────
+// 在线用户（从 Awareness 状态派生）
+// ─────────────────────────────────────────────
+const onlineUserList = ref<string[]>([])
+
+awareness.on('change', () => {
+  const users: string[] = []
+  awareness.getStates().forEach((state) => {
+    if (state.user?.name) users.push(state.user.name)
   })
-  console.log('[防抖发送] 长度:', text.length)
-}, 450)
+  onlineUserList.value = users
+})
 
-// 连接 WebSocket
+// 设置当前用户的 Awareness 状态（光标颜色随机）
+const randomColor =
+  '#' +
+  Math.floor(Math.random() * 0xffffff)
+    .toString(16)
+    .padStart(6, '0')
+awareness.setLocalStateField('user', {
+  name: currentUsername,
+  color: randomColor,
+})
+
+// ─────────────────────────────────────────────
+// WebSocket / STOMP
+// ─────────────────────────────────────────────
+const stompClient = ref<Client | null>(null)
+let docSubscription: any = null
+let awarenessSubscription: any = null
+
+/**
+ * 将 Uint8Array 编码为 Base64 字符串（分块处理，防止栈溢出）
+ */
+const toBase64 = (bytes: Uint8Array): string => {
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
+  }
+  return btoa(binary)
+}
+
+/**
+ * 将 Base64 字符串解码为 Uint8Array
+ */
+const fromBase64 = (b64: string): Uint8Array => {
+  const binary = atob(b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
 const connectWebSocket = () => {
   const token = localStorage.getItem('token')
   if (!token) {
@@ -119,175 +174,180 @@ const connectWebSocket = () => {
     return
   }
 
-  const docId = route.params.id as string
-  const socket = new SockJS('http://localhost:8080/ws')
+  const socket = new SockJS('/ws')
 
-  client.value = new Client({
+  stompClient.value = new Client({
     webSocketFactory: () => socket,
     connectHeaders: { Authorization: `Bearer ${token}` },
-    debug: (str) => console.log('[STOMP]', str),
     reconnectDelay: 5000,
     heartbeatIncoming: 10000,
     heartbeatOutgoing: 10000,
+    debug: (str) => console.log('[STOMP]', str),
   })
 
-  client.value.onConnect = () => {
+  stompClient.value.onConnect = () => {
     connected.value = true
     console.log('[STOMP] 连接成功')
 
-    // 订阅文档内容广播（你的原有逻辑）
-    if (client.value)
-      subscription = client.value.subscribe(`/topic/${docId}`, (message) => {
-        console.log('[收到广播] 原始 body:', message.body)
+    // ─── 订阅：接收其他客户端的 Yjs doc update ───
+    docSubscription = stompClient.value!.subscribe(`/topic/${docId}`, (message) => {
+      try {
+        const update = fromBase64(message.body)
+        // ✅ 应用远端 update，'remote' 标记防止自身触发死循环
+        Y.applyUpdate(ydoc, update, 'remote')
+      } catch (e) {
+        console.error('[Yjs] 应用远端 update 失败', e)
+      }
+    })
 
-        let data
-        try {
-          data = JSON.parse(message.body)
-          console.log(
-            '[解析成功] sender:',
-            data.sender,
-            'content length:',
-            data.content?.length || 0,
-          )
-        } catch (e) {
-          console.error('[解析失败] 使用原始 body', e)
-          data = { content: message.body, sender: 'unknown' }
-        }
+    // ─── 订阅：接收 Awareness（光标/在线状态）更新 ───
+    awarenessSubscription = stompClient.value!.subscribe(`/topic/${docId}/awareness`, (message) => {
+      try {
+        const update = fromBase64(message.body)
+        awarenessProtocol.applyAwarenessUpdate(awareness, update, 'remote')
+      } catch (e) {
+        console.error('[Awareness] 应用远端 update 失败', e)
+      }
+    })
 
-        const newContent = data.content || ''
-        const sender = data.sender || 'unknown'
-
-        if (sender === currentUsername) {
-          console.log('[忽略自己发的广播] sender 匹配当前用户')
-          return
-        }
-
-        console.log(`[将要应用远程更新] 来自 ${sender}，内容长度 ${newContent.length}`)
-
-        setQuillContent(newContent) // 调用上面改过的函数
-      })
-
-    // 【新增】订阅在线用户列表
-    if (client.value)
-      onlineSubscription = client.value.subscribe(`/topic/${docId}/online`, (message) => {
-        try {
-          const users = JSON.parse(message.body) // 后端广播的是 Set 的 JSON 数组，如 ["user1","user2"]
-          onlineUsers.value = Array.from(users)
-          console.log('[前端] 更新在线用户列表:', onlineUsers.value)
-        } catch (e) {
-          console.error('解析在线用户列表失败:', e, '原始数据:', message.body)
-          onlineUsers.value = []
-        }
-      })
-    // 【关键修复】订阅成功后，立即手动请求一次当前在线状态
-    setTimeout(() => {
-      if (client.value)
-        client.value.publish({
-          destination: `/app/online/${docId}`, // 后端端点
-        })
-      console.log('[前端] 订阅后主动请求在线用户列表')
-    }, 500) // 延迟 500ms，确保订阅通道已就绪
+    // ─── 主动广播当前用户的 Awareness 初始状态 ───
+    // awareness.setLocalStateField() 在模块加载时已执行（WebSocket 未连），
+    // 初始状态从未被广播，其他用户看不到新加入的用户。
+    const initAwareness = awarenessProtocol.encodeAwarenessUpdate(awareness, [ydoc.clientID])
+    stompClient.value!.publish({
+      destination: `/app/awareness/${docId}`,
+      body: toBase64(initAwareness),
+    })
+    console.log('[Awareness] 已广播初始状态')
   }
 
-  client.value.onStompError = (frame) => {
-    error.value = frame.body || 'STOMP 连接错误'
+  stompClient.value.onStompError = (frame) => {
+    wsError.value = frame.body || 'STOMP 连接错误'
     console.error('[STOMP] 错误:', frame)
   }
 
-  client.value.activate()
-}
-// 设置 Quill 内容
-const setQuillContent = (text: string) => {
-  const quill = quillRef.value?.getQuill()
-  if (!quill) return
-
-  const currentText = quill.getText()
-
-  // 放宽判断：只要内容长度或内容有差异就更新（避免 trim 误判空格/换行）
-  if (currentText !== text) {
-    // 改成 !== 而非 trim 比较
-    quill.setText(text, 'silent') // 必须加 'silent'！！
-    console.log('[setQuillContent] 更新成功 (silent):', text.substring(0, 50))
-  } else {
-    console.log('[setQuillContent] 内容相同，跳过更新')
-  }
+  stompClient.value.activate()
 }
 
-// Quill 变化发送完整文本
-const onTextChange = (delta: any, oldDelta: any, source: string) => {
-  if (source !== 'user' || isApplyingRemote.value) {
-    console.log('非用户来源，跳过发送')
-    return
-  }
+// ─────────────────────────────────────────────
+// Yjs update 监听 → 发送给服务端广播
+// ─────────────────────────────────────────────
+
+/**
+ * 监听本地 ydoc 变化，将 update 编码后通过 STOMP 发送
+ * origin === 'remote' 时跳过，避免把别人的更新再广播一遍
+ */
+const onYjsUpdate = (update: Uint8Array, origin: any) => {
+  if (origin === 'remote') return // 来自远端，不再转发
+  if (!connected.value || !stompClient.value) return
 
   hasChanges.value = true
 
-  const quill = quillRef.value?.getQuill()
-  if (!quill) return
-
-  const fullText = quill.getText() // 保留 \n
-
-  debouncedSend(fullText)
+  stompClient.value.publish({
+    destination: `/app/edit/${docId}`,
+    body: toBase64(update), // Base64 文本帧
+  })
 }
 
+/**
+ * 监听 Awareness 变化，广播给其他用户（光标位置、在线状态）
+ */
+const onAwarenessUpdate = ({ added, updated, removed }: any) => {
+  if (!connected.value || !stompClient.value) return
+
+  const changedClients = [...added, ...updated, ...removed]
+  const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, changedClients)
+
+  stompClient.value.publish({
+    destination: `/app/awareness/${docId}`,
+    body: toBase64(awarenessUpdate),
+  })
+}
+
+// ─────────────────────────────────────────────
+// 初始化
+// ─────────────────────────────────────────────
+let binding: QuillBinding | null = null
+
 onMounted(async () => {
-  const id = route.params.id as string
+  // 1. 加载文档元信息 + 初始内容
   try {
-    const res = await api.get(`/api/documents/${id}`)
+    const res = await api.get(`/api/documents/${docId}`)
     doc.value = {
       id: res.data.id.toString(),
       title: res.data.title,
-      content: res.data.content?.text || res.data.content || '',
     }
 
-    // 等待 Quill 组件真正渲染完成（关键修复）
-    await nextTick()
-    await new Promise((resolve) => setTimeout(resolve, 500)) // 先试 500ms，如果还不行改成 800 或 1000
+    // 将服务端保存的初始文本插入 ytext（仅在 ytext 为空时）
+    const initialText: string = res.data.content?.text || res.data.content || ''
+    const yjsStateBase64: string | undefined = res.data.yjsState
 
-    const quill = quillRef.value?.getQuill()
-    if (quill) {
-      quill.setText(doc.value.content, 'silent')
-      console.log(
-        '[前端] Quill 实例就绪，初始内容设置成功:',
-        doc.value.content.substring(0, 50) + '...',
-      )
-    } else {
-      console.error('[前端] Quill 实例仍未就绪，等待时间可能不足')
-      // 可选：再等一次（极端情况）
-      setTimeout(() => {
-        const retryQuill = quillRef.value?.getQuill()
-        if (retryQuill) {
-          retryQuill.setText(doc.value.content, 'silent')
-          console.log('[重试成功] Quill 初始内容设置完成')
-        }
-      }, 800)
+    if (yjsStateBase64) {
+      // 优先从 Yjs 状态快照恢复（包含完整 CRDT 历史）
+      Y.applyUpdate(ydoc, fromBase64(yjsStateBase64), 'remote')
+      console.log('[Yjs] 从服务端恢复 Yjs 状态，长度:', yjsStateBase64.length)
+    } else if (ytext.length === 0 && initialText) {
+      ydoc.transact(() => {
+        ytext.insert(0, initialText)
+      }, 'init') // origin 标记为 'init'，不会触发 onYjsUpdate 发送
     }
-  } catch (err) {
+  } catch (e) {
     toast.error('加载失败')
     router.back()
+    return
   } finally {
-    loading.value = false // 无论成功失败都关闭 loading
+    loading.value = false
   }
 
+  // 2. 等待 Quill 渲染完成
+  await nextTick()
+  await new Promise((r) => setTimeout(r, 300))
+
+  // 3. 创建 Yjs ↔ Quill 绑定（核心！）
+  const quill = quillRef.value?.getQuill()
+  if (quill) {
+    binding = new QuillBinding(ytext, quill, awareness)
+    console.log('[Yjs] QuillBinding 创建成功')
+  } else {
+    console.error('[Yjs] Quill 实例未就绪')
+  }
+
+  // 4. 注册 Yjs 监听器
+  ydoc.on('update', onYjsUpdate)
+  awareness.on('update', onAwarenessUpdate)
+
+  // 5. 连接 WebSocket
   connectWebSocket()
 })
 
 onBeforeUnmount(() => {
-  subscription?.unsubscribe()
-  onlineSubscription?.unsubscribe() // 【新增】取消在线列表订阅
-  client.value?.deactivate()
+  // 清理顺序：先移除监听，再销毁绑定，最后断开连接
+  ydoc.off('update', onYjsUpdate)
+  awareness.off('update', onAwarenessUpdate)
+
+  // 通知其他用户自己离线
+  awareness.destroy()
+
+  binding?.destroy()
+
+  docSubscription?.unsubscribe()
+  awarenessSubscription?.unsubscribe()
+  stompClient.value?.deactivate()
 })
 
+// ─────────────────────────────────────────────
 // 保存
+// ─────────────────────────────────────────────
 const saveDoc = async () => {
   saving.value = true
   try {
-    const quill = quillRef.value?.getQuill()
-    const plainText = quill ? quill.getText().trim() : doc.value.content
+    // 从 ytext 读取纯文本作为保存内容
+    const plainText = ytext.toString()
 
-    await api.put(`/api/documents/${doc.value.id}`, {
-      title: doc.value.title,
+    await api.put(`/api/documents/${doc.value!.id}`, {
+      title: doc.value!.title,
       content: plainText,
+      yjsState: toBase64(Y.encodeStateAsUpdate(ydoc)), // 保存完整 Yjs CRDT 状态
     })
 
     toast.success('保存成功')
@@ -299,34 +359,31 @@ const saveDoc = async () => {
     saving.value = false
   }
 }
+
+// ─────────────────────────────────────────────
+// 导出 PDF
+// ─────────────────────────────────────────────
 const exportPdf = async () => {
   try {
-    const res = await api.get(`/api/documents/${route.params.id}/export-pdf`, {
-      responseType: 'blob', // 重要：接收二进制
+    const res = await api.get(`/api/documents/${docId}/export-pdf`, {
+      responseType: 'blob',
     })
-
     const url = window.URL.createObjectURL(new Blob([res.data]))
     const link = document.createElement('a')
     link.href = url
-    link.setAttribute('download', `${doc.value.title}.pdf`)
+    link.setAttribute('download', `${doc.value?.title ?? 'document'}.pdf`)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
     window.URL.revokeObjectURL(url)
-
     toast.success('PDF 导出成功')
-  } catch (err) {
+  } catch {
     toast.error('导出失败')
   }
 }
 </script>
 
 <style scoped>
-.status {
-  margin: 10px 0;
-  font-size: 14px;
-  color: #666;
-}
 .edit-document {
   max-width: 900px;
   margin: 40px auto;
@@ -351,19 +408,13 @@ label {
   font-weight: bold;
 }
 
-input,
-textarea {
+input {
   width: 100%;
   padding: 12px;
   border: 1px solid #ddd;
   border-radius: 6px;
   font-size: 16px;
   box-sizing: border-box;
-}
-
-textarea {
-  min-height: 400px;
-  resize: vertical;
 }
 
 .actions {
@@ -378,19 +429,6 @@ button {
   font-size: 16px;
   border-radius: 6px;
   cursor: pointer;
-}
-
-button.primary {
-  background: #4a90e2;
-  color: white;
-  border: none;
-}
-
-button.primary:hover {
-  background: #357abd;
-}
-
-button.secondary {
   background: #f0f0f0;
   border: 1px solid #ddd;
 }
@@ -398,6 +436,12 @@ button.secondary {
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.status {
+  margin: 10px 0;
+  font-size: 14px;
+  color: #666;
 }
 
 .tip {
