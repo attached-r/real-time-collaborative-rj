@@ -96,11 +96,11 @@ frontend/fronted (前端)
 
 ## 未来优化方向
 
-- 实现真正的 OT / CRDT 合并（Yjs 或 diff-match-patch）
+~~- 实现真正的 OT / CRDT 合并（Yjs 或 diff-match-patch）~~
 - 添加 AI 文档总结（集成 DeepSeek / OpenAI API）
 - 支持 PDF 导出（OpenPDF）
 - 完善版本回滚功能
-- 优化前端 UI（暗黑模式、响应式）
+~~- 优化前端 UI（暗黑模式、响应式）~~
 
 ## 联系方式
 
